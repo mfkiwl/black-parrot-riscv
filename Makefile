@@ -35,10 +35,8 @@ tidy_tools:
 	cd $(TOP); git submodule deinit -f external/riscv-gnu-toolchain
 	cd $(TOP); git submodule deinit -f external/verilator
 	cd $(TOP); git submodule deinit -f external/dromajo
-	cd $(TOP); git submodule deinit -f external/riscv-isa-sim
 	cd $(TOP); git submodule deinit -f external/axe
 	cd $(TOP); git submodule deinit -f external/cmurphi
-	cd $(TOP); git submodule deinit -f external/zachjs_sv2v
 
 
 ## This target just wipes the whole repo clean.
@@ -58,19 +56,15 @@ $(TARGET_DIRS):
 #
 libs: $(TARGET_DIRS)
 	$(MAKE) basejump
-	$(MAKE) dramsim2
-	#$(MAKE) dramsim3
 	$(MAKE) dromajo
 
 tools: | $(TARGET_DIRS)
 	$(MAKE) gnu
 	$(MAKE) verilator
 	$(MAKE) dromajo
-	$(MAKE) spike
-	#$(MAKE) axe
-	#$(MAKE) cmurphi
-	#$(MAKE) zachjs_sv2v
-	#$(MAKE) bsg_sv2v
+	$(MAKE) axe
+	$(MAKE) cmurphi
+	$(MAKE) bsg_sv2v
 
 progs: tools
 	git submodule update --init --recursive $(BP_COMMON_DIR)/test
@@ -78,4 +72,3 @@ progs: tools
 
 ucode: | basejump
 	$(MAKE) -C $(BP_ME_DIR)/src/asm roms
-

@@ -13,14 +13,16 @@ BlackParrot aims to be the default open-source, Linux-capable, cache-coherent, R
     - Combat NIH, welcome external contributions and strive for infrastructure agnosticism.
 
 ## Project Status
-BlackParrot v 1.0 was released in March 2020 and has been up and running in the lab since April 2020. It supports configurations scaling up to a 16-core cache coherent multicore, including the baseline user and privilege mode functionality to run Linux. An optimized single core variant of BlackParrot (also Linux-capable) is also available.
+BlackParrot v 1.0 was released in March 2020 and has been up and running in the lab since April 2020. It supports configurations scaling up to a 16-core cache coherent multicore, including the baseline user and privilege mode functionality to run Linux. An optimized single core variant of BlackParrot (also Linux-capable) is also available. Currently, the core supports RV64IMAFD, with C support on the way!
 
 Development of BlackParrot continues, and we are very excited about what we are releasing next!
 
 A 12nm BlackParrot multicore chip was taped out in July 2019.
 
 ## Press
-We first announced BlackParrot at FOSDEM 2020! [slides](https://fosdem.org/2020/schedule/event/riscv_blackparrot/attachments/slides/3718/export/events/attachments/riscv_blackparrot/slides/3718/Talk_Slides) [video](https://video.fosdem.org/2020/K.3.401/riscv_blackparrot.mp4) 
+We presented BlackParrot at the ICS 2020 Workshop on RISC-V and OpenPOWER! [slides](https://ics2020.bsc.es/sites/default/files/uploaded/DAN%20PETRISKO%20BlackParrot%20ISC%202020.pdf)
+
+We first announced BlackParrot at FOSDEM 2020! [slides](https://fosdem.org/2020/schedule/event/riscv_blackparrot/attachments/slides/3718/export/events/attachments/riscv_blackparrot/slides/3718/Talk_Slides) [video](https://video.fosdem.org/2020/K.3.401/riscv_blackparrot.mp4) [pdf](https://drive.google.com/file/d/16BXCT1kK3gQ0XKfZPR-K8Zs2E648qFp9/view?usp=sharing)
 
 ## Getting Started
 ### Tire Kick
@@ -81,11 +83,9 @@ coherent accelerators in a BlackParrot multicore system. Please see the [BedRock
 for more details on the coherence protocol and system.
 
 ## Microarchitecture Guide
-Coming soon!
 [Microarchitecture Guide](docs/microarchitecture_guide.md)
 
 ## Platform Guide
-Coming soon!
 [Platform Guide](docs/platform_guide.md)
 
 ## CAD Backend Guide

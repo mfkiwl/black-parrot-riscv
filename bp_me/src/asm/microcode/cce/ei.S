@@ -34,13 +34,12 @@ rdw addr=req lce=req lru_way=lru
 gad
 # fall through
 
-set_entry: wde addr=req lce=req way=lru state=nextCohSt
-
 # Replacement Check Routine
-replace_check: bfz transfer_check rf
+replace_check: bfz next_coh_state rf
 
 # Replacement Routine
-replace: pushq lceCmd WB addr=lru lce=req way=lru
+replace: movis COH_I nextCohSt
+pushq lceCmd ST_WB addr=lru lce=req way=lru
 # wait for writeback response
 replacement_poph: poph lceResp r0
 beqi r0 COH_ACK replacement_poph
@@ -48,17 +47,20 @@ bf complete_replacement nwbf
 pushq memCmd MEM_CMD_WR addr=lru lce=req way=lru wp=1
 complete_replacement: popq lceResp
 
-# Transfer Check
-transfer_check: bfz read_l2 cef cmf cof cff pt
+# Next Coherence State Routine
+# all requests get block in E
+next_coh_state: movis COH_E nextCohSt
+set_entry: wde addr=req lce=req way=lru state=nextCohSt
 
-# Transfer routine - other cache has block in E/M
+# Transfer Check
+transfer_check: bfz read_l2 cef pt
+
+# Transfer routine - other cache has block in E
 # state for lceCmd will always come from nextCohSt
-transfer: movis COH_I nextCohSt
-pushq lceCmd ST addr=req lce=owner way=owner
-wds addr=req lce=owner way=owner state=nextCohSt
+transfer: movis COH_I ownerCohSt
 movis COH_E nextCohSt
-pushq lceCmd TR addr=req lce=owner way=owner
-pushq lceCmd WB addr=req lce=owner way=owner
+pushq lceCmd ST_TR_WB addr=req lce=owner way=owner
+wds addr=req lce=owner way=owner state=ownerCohSt
 # wait for transfer WB response
 transfer_poph: poph lceResp r0
 beqi r0 COH_ACK transfer_poph
@@ -72,11 +74,50 @@ read_l2: pushq memCmd MEM_CMD_RD addr=req lce=req way=lru wp=1
 bi ready
 
 # Uncached Request Routine
-uncached_req: bf uncached_store rqf
+uncached_req: bf uc_coherent rcf
+bf uncached_store rqf
 pushq memCmd MEM_CMD_UC_RD addr=req lce=req
 popq lceReq
 bi ready
 uncached_store: pushq memCmd MEM_CMD_UC_WR addr=req lce=req
+popq lceReq
+bi ready
+
+# Uncached request to coherent/cacheable memory
+uc_coherent: rdp addr=req
+bf uc_coherent pf
+rdw addr=req lce=req lru_way=lru
+gad
+movis COH_I nextCohSt
+movsg msgsize r7
+movis SIZE_64 msgsize
+
+bfz uc_inv_check rf
+
+# Replacement Routine
+pushq lceCmd ST_WB addr=req lce=req way=req
+wds addr=req lce=req way=req state=imm COH_I
+uc_replacement_poph: poph lceResp r0
+beqi r0 COH_ACK uc_replacement_poph
+bf uc_complete_replacement nwbf
+pushq memCmd MEM_CMD_WR addr=req lce=req way=req wp=1
+uc_complete_replacement: popq lceResp
+
+uc_inv_check: bfz uc_mem cef cmf pt
+pushq lceCmd ST_WB addr=req lce=owner way=owner
+wds addr=req lce=owner way=owner state=imm COH_I
+uc_inv_poph: poph lceResp r0
+beqi r0 COH_ACK uc_inv_poph
+bf uc_complete_inv nwbf
+pushq memCmd MEM_CMD_WR addr=req lce=req way=req wp=1
+uc_complete_inv: popq lceResp
+
+uc_mem: movgs r7 msgsize
+bf coherent_store rqf
+pushq memCmd MEM_CMD_UC_RD addr=req lce=req wp=1
+popq lceReq
+bi ready
+coherent_store: pushq memCmd MEM_CMD_UC_WR addr=req lce=req wp=1
 popq lceReq
 bi ready
 

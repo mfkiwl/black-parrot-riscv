@@ -1,9 +1,3 @@
-[submodule "external/riscv-isa-sim"]
-  path = external/riscv-isa-sim
-  url = https://github.com/black-parrot/riscv-isa-sim.git
-  branch = blackparrot_mods
-  ignore = dirty
-
 [submodule "external/axe"]
   path = external/axe
   url = https://github.com/black-parrot/axe
@@ -25,12 +19,6 @@
 [submodule "external/basejump_stl"]
   path = external/basejump_stl
   url = https://github.com/bespoke-silicon-group/basejump_stl.git
-  branch = master
-  ignore = dirty
-
-[submodule "external/DRAMSim2"]
-  path = external/DRAMSim2
-  url = https://github.com/umd-memsys/DRAMSim2.git
   branch = master
   ignore = dirty
 
@@ -88,12 +76,6 @@
   branch = master
   ignore = dirty
 
-[submodule "external/DRAMsim3"]
-  path = external/DRAMsim3
-  url = https://github.com/umd-memsys/DRAMsim3.git
-  branch = master
-  ignore = dirty
-
 [submodule "external/bsg_sv2v"]
   path = external/bsg_sv2v
   url = https://github.com/bespoke-silicon-group/bsg_sv2v.git
@@ -119,12 +101,6 @@
   branch = master
   ignore = dirty
 
-[submodule "external/zachjs_sv2v"]
-  path = external/zachjs_sv2v
-  url = https://github.com/zachjs/sv2v.git
-  branch = master
-  ignore = dirty
-
 [submodule "bp_common/test/src/linux"]
   path = bp_common/test/src/linux
   url = https://github.com/torvalds/linux
@@ -134,5 +110,11 @@
 [submodule "bp_common/test/src/buildroot"]
   path = bp_common/test/src/buildroot
   url = https://github.com/buildroot/buildroot
+  branch = master
+  ignore = dirty
+
+[submodule "external/HardFloat"]
+  path = external/HardFloat
+  url = https://github.com/bsg-external/HardFloat.git
   branch = master
   ignore = dirty

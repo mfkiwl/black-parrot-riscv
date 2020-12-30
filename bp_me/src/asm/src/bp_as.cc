@@ -232,6 +232,12 @@ Assembler::parseOpd(string &s) {
     return e_opd_rf;
   } else if (!s.compare("uf")) {
     return e_opd_uf;
+  } else if (!s.compare("arf")) {
+    return e_opd_arf;
+  } else if (!s.compare("anrf")) {
+    return e_opd_anrf;
+  } else if (!s.compare("rcf")) {
+    return e_opd_rcf;
 
   // Special
   } else if (!s.compare("reqlce")) {
@@ -256,9 +262,8 @@ Assembler::parseOpd(string &s) {
     return e_opd_msg_size;
   } else if (!s.compare("lrucohst")) {
     return e_opd_lru_coh_state;
-
-  } else if (!s.compare("flagsandmask")) {
-    return e_opd_flags_and_mask;
+  } else if (!s.compare("ownercohst")) {
+    return e_opd_owner_coh_state;
 
   } else if (!s.compare("shhit")) {
     return e_opd_sharers_hit;
@@ -386,6 +391,12 @@ Assembler::parseFlagOneHot(string &s, bool &error) {
     return e_flag_rf;
   } else if (!s.compare("uf")) {
     return e_flag_uf;
+  } else if (!s.compare("arf")) {
+    return e_flag_arf;
+  } else if (!s.compare("anrf")) {
+    return e_flag_anrf;
+  } else if (!s.compare("rcf")) {
+    return e_flag_rcf;
   } else {
     error = true;
     return e_flag_rqf;
@@ -528,6 +539,8 @@ Assembler::parseCohStateSel(string &s) {
   } else if (!s.compare("shcoh")) {
     // note: requires source A
     return e_mux_sel_sharer_state;
+  } else if (!s.compare("ownercohst")) {
+    return e_mux_sel_coh_owner_coh_state;
   } else if (!s.compare("imm")) {
     return e_mux_sel_coh_inst_imm;
   } else {
@@ -670,7 +683,7 @@ Assembler::parsePushQueueArgs(vector<string> *tokens, int n, pushq_args *args) {
   if (args->dst_q == e_dst_q_sel_lce_cmd) {
     args->lce_cmd = (bp_lce_cmd_type_e)parseImm(tokens->at(2));
   } else {
-    args->mem_cmd = (bp_cce_mem_cmd_type_e)parseImm(tokens->at(2));
+    args->mem_cmd = (bp_mem_msg_e)parseImm(tokens->at(2));
   }
   // after the opcode, address, and command, all args are optional and default to 0
   // args are specified as "arg=value"
