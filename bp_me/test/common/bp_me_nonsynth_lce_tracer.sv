@@ -3,9 +3,11 @@
  *
  */
 
+`include "bp_common_defines.svh"
+`include "bp_me_defines.svh"
+
 module bp_me_nonsynth_lce_tracer
   import bp_common_pkg::*;
-  import bp_common_aviary_pkg::*;
   import bp_me_nonsynth_pkg::*;
   #(parameter bp_params_e bp_params_p = e_bp_unicore_half_cfg
     `declare_bp_proc_params(bp_params_p)
@@ -27,7 +29,7 @@ module bp_me_nonsynth_lce_tracer
 
     , localparam lg_num_cce_lp=`BSG_SAFE_CLOG2(num_cce_p)
 
-    , localparam lce_req_data_width_lp = dword_width_p
+    , localparam lce_req_data_width_lp = dword_width_gp
 
     `declare_bp_bedrock_lce_if_widths(paddr_width_p, cce_block_width_p, lce_id_width_p, cce_id_width_p, lce_assoc_p, lce)
   )
@@ -40,11 +42,11 @@ module bp_me_nonsynth_lce_tracer
     // LCE-CCE Interface
     ,input [lce_req_msg_width_lp-1:0]                       lce_req_i
     ,input                                                  lce_req_v_i
-    ,input                                                  lce_req_ready_i
+    ,input                                                  lce_req_ready_then_i
 
     ,input [lce_resp_msg_width_lp-1:0]                      lce_resp_i
     ,input                                                  lce_resp_v_i
-    ,input                                                  lce_resp_ready_i
+    ,input                                                  lce_resp_ready_then_i
 
     ,input [lce_cmd_msg_width_lp-1:0]                       lce_cmd_i
     ,input                                                  lce_cmd_v_i
@@ -52,7 +54,7 @@ module bp_me_nonsynth_lce_tracer
 
     ,input [lce_cmd_msg_width_lp-1:0]                       lce_cmd_o_i
     ,input                                                  lce_cmd_o_v_i
-    ,input                                                  lce_cmd_o_ready_i
+    ,input                                                  lce_cmd_o_ready_then_i
   );
 
   // LCE-CCE interface structs
@@ -89,7 +91,7 @@ module bp_me_nonsynth_lce_tracer
       // LCE-CCE Interface
 
       // request to CCE
-      if (lce_req_v_i & lce_req_ready_i) begin
+      if (lce_req_v_i & lce_req_ready_then_i) begin
         assert(lce_req_payload.src_id == lce_id_i) else $error("Bad LCE Request - source mismatch");
         $fdisplay(file, "[%t]: LCE[%0d] REQ addr[%H] cce[%0d] msg[%b] ne[%b] lru[%0d] size[%b] %H"
                   , $time, lce_req_payload.src_id, lce_req.header.addr, lce_req_payload.dst_id, lce_req.header.msg_type
@@ -99,7 +101,7 @@ module bp_me_nonsynth_lce_tracer
       end
 
       // response to CCE
-      if (lce_resp_v_i & lce_resp_ready_i) begin
+      if (lce_resp_v_i & lce_resp_ready_then_i) begin
         assert(lce_resp_payload.src_id == lce_id_i) else $error("Bad LCE Response - source mismatch");
         $fdisplay(file, "[%t]: LCE[%0d] RESP addr[%H] cce[%0d] msg[%b] len[%b] %H"
                   , $time, lce_resp_payload.src_id, lce_resp.header.addr, lce_resp_payload.dst_id, lce_resp.header.msg_type
@@ -118,7 +120,7 @@ module bp_me_nonsynth_lce_tracer
       end
 
       // command from LCE
-      if (lce_cmd_o_v_i & lce_cmd_o_ready_i) begin
+      if (lce_cmd_o_v_i & lce_cmd_o_ready_then_i) begin
         $fdisplay(file, "[%t]: LCE[%0d] CMD OUT dst[%0d] addr[%H] CCE[%0d] msg[%b] way[%0d] state[%b] tgt[%0d] tgt_way[%0d] len[%b] %H"
                   , $time, lce_id_i, lce_cmd_lo_payload.dst_id, lce_cmd_lo.header.addr, lce_cmd_lo_payload.src_id, lce_cmd_lo.header.msg_type
                   , lce_cmd_lo_payload.way_id, lce_cmd_lo_payload.state, lce_cmd_lo_payload.target, lce_cmd_lo_payload.target_way_id

@@ -3,9 +3,11 @@
  * bp_mem_nonsynth_tracer.v
  */
 
+`include "bp_common_defines.svh"
+`include "bp_me_defines.svh"
+
 module bp_mem_nonsynth_tracer
   import bp_common_pkg::*;
-  import bp_common_aviary_pkg::*;
   import bp_me_pkg::*;
   #(parameter bp_params_e bp_params_p = e_bp_default_cfg
    `declare_bp_proc_params(bp_params_p)
@@ -19,7 +21,7 @@ module bp_mem_nonsynth_tracer
    // BP side
    , input [cce_mem_msg_width_lp-1:0]    mem_cmd_i
    , input                               mem_cmd_v_i
-   , input                               mem_cmd_ready_i
+   , input                               mem_cmd_ready_and_i
 
    , input [cce_mem_msg_width_lp-1:0]    mem_resp_i
    , input                               mem_resp_v_i
@@ -28,7 +30,7 @@ module bp_mem_nonsynth_tracer
 
 `declare_bp_bedrock_mem_if(paddr_width_p, cce_block_width_p, lce_id_width_p, lce_assoc_p, cce);
 
-wire unused = &{mem_cmd_ready_i, mem_resp_v_i};
+wire unused = &{mem_resp_v_i};
 
 integer file;
 always_ff @(negedge reset_i) begin
@@ -42,7 +44,7 @@ assign mem_cmd_cast_i = mem_cmd_i;
 assign mem_resp_cast_i = mem_resp_i;
 
 always_ff @(posedge clk_i) begin
-  if (mem_cmd_v_i)
+  if (mem_cmd_v_i & mem_cmd_ready_and_i)
     case (mem_cmd_cast_i.header.msg_type.mem)
       e_bedrock_mem_rd:
         $fwrite(file, "[%t] CMD  RD  : (%x) %b\n", $time, mem_cmd_cast_i.header.addr, mem_cmd_cast_i.header.size);

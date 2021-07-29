@@ -8,9 +8,11 @@
  *
  */
 
+`include "bp_common_defines.svh"
+`include "bp_me_defines.svh"
+
 module bp_lce
   import bp_common_pkg::*;
-  import bp_common_aviary_pkg::*;
  #(parameter bp_params_e bp_params_p = e_bp_default_cfg
    `declare_bp_proc_params(bp_params_p)
 
@@ -31,12 +33,14 @@ module bp_lce
     // issue non-exclusive read requests
     , parameter non_excl_reads_p = 0
 
+    , parameter metadata_latency_p = 0
+
     , localparam block_size_in_bytes_lp = (block_width_p/8)
     , localparam lg_sets_lp = `BSG_SAFE_CLOG2(sets_p)
     , localparam lg_block_size_in_bytes_lp = `BSG_SAFE_CLOG2(block_size_in_bytes_lp)
 
    `declare_bp_bedrock_lce_if_widths(paddr_width_p, cce_block_width_p, lce_id_width_p, cce_id_width_p, lce_assoc_p, lce)
-   `declare_bp_cache_engine_if_widths(paddr_width_p, ptag_width_p, sets_p, assoc_p, dword_width_p, block_width_p, fill_width_p, cache)
+   `declare_bp_cache_engine_if_widths(paddr_width_p, ctag_width_p, sets_p, assoc_p, dword_width_gp, block_width_p, fill_width_p, cache)
   )
   (
     input                                            clk_i
@@ -56,7 +60,8 @@ module bp_lce
     , output logic                                   cache_req_busy_o
     , input [cache_req_metadata_width_lp-1:0]        cache_req_metadata_i
     , input                                          cache_req_metadata_v_i
-    , output logic                                   cache_req_critical_o
+    , output logic                                   cache_req_critical_tag_o
+    , output logic                                   cache_req_critical_data_o
     , output logic                                   cache_req_complete_o
     , output logic                                   cache_req_credits_full_o
     , output logic                                   cache_req_credits_empty_o
@@ -84,12 +89,12 @@ module bp_lce
     // Req: ready->valid
     , output logic [lce_req_msg_width_lp-1:0]        lce_req_o
     , output logic                                   lce_req_v_o
-    , input                                          lce_req_ready_i
+    , input                                          lce_req_ready_then_i
 
     // Resp: ready->valid
     , output logic [lce_resp_msg_width_lp-1:0]       lce_resp_o
     , output logic                                   lce_resp_v_o
-    , input                                          lce_resp_ready_i
+    , input                                          lce_resp_ready_then_i
 
     // CCE-LCE interface
     // Cmd_i: valid->yumi
@@ -101,7 +106,7 @@ module bp_lce
     // Cmd_o: ready->valid
     , output logic [lce_cmd_msg_width_lp-1:0]        lce_cmd_o
     , output logic                                   lce_cmd_v_o
-    , input                                          lce_cmd_ready_i
+    , input                                          lce_cmd_ready_then_i
   );
 
   //synopsys translate_off
@@ -131,6 +136,7 @@ module bp_lce
       ,.fill_width_p(fill_width_p)
       ,.credits_p(credits_p)
       ,.non_excl_reads_p(non_excl_reads_p)
+      ,.metadata_latency_p(metadata_latency_p)
       )
     request
       (.clk_i(clk_i)
@@ -156,7 +162,7 @@ module bp_lce
 
       ,.lce_req_o(lce_req_o)
       ,.lce_req_v_o(lce_req_v_o)
-      ,.lce_req_ready_i(lce_req_ready_i)
+      ,.lce_req_ready_then_i(lce_req_ready_then_i)
       );
 
   // LCE Command Module
@@ -181,7 +187,8 @@ module bp_lce
       ,.ready_o(cmd_ready_lo)
       ,.sync_done_o(sync_done_lo)
       ,.cache_req_complete_o(cache_req_complete_o)
-      ,.cache_req_critical_o(cache_req_critical_o)
+      ,.cache_req_critical_tag_o(cache_req_critical_tag_o)
+      ,.cache_req_critical_data_o(cache_req_critical_data_o)
       ,.uc_store_req_complete_o(uc_store_req_complete_lo)
 
       ,.data_mem_pkt_o(data_mem_pkt_o)
@@ -205,11 +212,11 @@ module bp_lce
 
       ,.lce_resp_o(lce_resp_o)
       ,.lce_resp_v_o(lce_resp_v_o)
-      ,.lce_resp_ready_i(lce_resp_ready_i)
+      ,.lce_resp_ready_then_i(lce_resp_ready_then_i)
 
       ,.lce_cmd_o(lce_cmd_o)
       ,.lce_cmd_v_o(lce_cmd_v_o)
-      ,.lce_cmd_ready_i(lce_cmd_ready_i)
+      ,.lce_cmd_ready_then_i(lce_cmd_ready_then_i)
       );
 
 

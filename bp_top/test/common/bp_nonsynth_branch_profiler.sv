@@ -1,7 +1,9 @@
 
+`include "bp_common_defines.svh"
+`include "bp_top_defines.svh"
+
 module bp_nonsynth_branch_profiler
   import bp_common_pkg::*;
-  import bp_common_aviary_pkg::*;
   import bp_be_pkg::*;
   #(parameter bp_params_e bp_params_p = e_bp_default_cfg
     `declare_bp_proc_params(bp_params_p)
@@ -22,7 +24,7 @@ module bp_nonsynth_branch_profiler
     );
 
   `declare_bp_core_if(vaddr_width_p, paddr_width_p, asid_width_p, branch_metadata_fwd_width_p);
-  `declare_bp_fe_branch_metadata_fwd_s(btb_tag_width_p, btb_idx_width_p, bht_idx_width_p, ghist_width_p);
+  `declare_bp_fe_branch_metadata_fwd_s(btb_tag_width_p, btb_idx_width_p, bht_idx_width_p, ghist_width_p, bht_row_width_p);
   bp_fe_cmd_s fe_cmd;
   bp_fe_branch_metadata_fwd_s branch_metadata;
   assign fe_cmd = fe_cmd_o;

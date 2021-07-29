@@ -1,6 +1,9 @@
+`ifndef BP_SIM_CLK_PERIOD
+`define BP_SIM_CLK_PERIOD 10
+`endif
+
 module testbench
   import bp_common_pkg::*;
-  import bp_common_aviary_pkg::*;
   import bp_fe_pkg::*;
   import bp_me_pkg::*;
   #(parameter bp_params_e bp_params_p = BP_CFG_FLOWVAR
@@ -16,35 +19,69 @@ module testbench
 
    , parameter trace_file_p = "test.tr"
 
-   , parameter dram_fixed_latency_p = 0
-   , parameter [paddr_width_p-1:0] mem_offset_p = dram_base_addr_gp
-   , parameter mem_cap_in_bytes_p = 2**25
-   , parameter mem_file_p = "prog.mem"
+   // DRAM parameters
+   , parameter dram_type_p                 = BP_DRAM_FLOWVAR // Replaced by the flow with a specific dram_type
 
-  , localparam cfg_bus_width_lp = `bp_cfg_bus_width(vaddr_width_p, core_id_width_p, cce_id_width_p, lce_id_width_p, cce_pc_width_p, cce_instr_width_p)
-  , localparam page_offset_width_lp = bp_page_offset_width_gp
-  , localparam ptag_width_lp = (paddr_width_p - page_offset_width_lp)
-  , localparam trace_replay_data_width_lp = ptag_width_lp + vaddr_width_p + 1
+  , localparam cfg_bus_width_lp = `bp_cfg_bus_width(hio_width_p, core_id_width_p, cce_id_width_p, lce_id_width_p)
+  , localparam trace_replay_data_width_lp = ptag_width_p + vaddr_width_p + 1
   , localparam trace_rom_addr_width_lp = 7
 
   , localparam yumi_min_delay_lp = 0
   , localparam yumi_max_delay_lp = 15
   )
-  ( input clk_i
-  , input reset_i
-  , input dram_clk_i
-  , input dram_reset_i
-  );
+  (output bit reset_i);
 
   `declare_bp_bedrock_mem_if(paddr_width_p, cce_block_width_p, lce_id_width_p, lce_assoc_p, cce)
-  `declare_bp_cfg_bus_s(vaddr_width_p, core_id_width_p, cce_id_width_p, lce_id_width_p, cce_pc_width_p, cce_instr_width_p);
+  `declare_bp_cfg_bus_s(hio_width_p, core_id_width_p, cce_id_width_p, lce_id_width_p);
+
+  // Bit to deal with initial X->0 transition detection
+  bit clk_i;
+  bit dram_clk_i, dram_reset_i;
+  
+  `ifdef VERILATOR
+    bsg_nonsynth_dpi_clock_gen
+  `else
+    bsg_nonsynth_clock_gen
+  `endif
+   #(.cycle_time_p(`BP_SIM_CLK_PERIOD))
+   clock_gen
+    (.o(clk_i));
+  
+  bsg_nonsynth_reset_gen
+   #(.num_clocks_p(1)
+     ,.reset_cycles_lo_p(0)
+     ,.reset_cycles_hi_p(20)
+     )
+   reset_gen
+    (.clk_i(clk_i)
+     ,.async_reset_o(reset_i)
+     );
+  
+  `ifdef VERILATOR
+    bsg_nonsynth_dpi_clock_gen
+  `else
+    bsg_nonsynth_clock_gen
+  `endif
+   #(.cycle_time_p(`dram_pkg::tck_ps))
+   dram_clock_gen
+    (.o(dram_clk_i));
+  
+  bsg_nonsynth_reset_gen
+   #(.num_clocks_p(1)
+     ,.reset_cycles_lo_p(0)
+     ,.reset_cycles_hi_p(10)
+     )
+   dram_reset_gen
+    (.clk_i(dram_clk_i)
+     ,.async_reset_o(dram_reset_i)
+     );
 
   bp_cfg_bus_s cfg_bus_cast_li;
   logic [cfg_bus_width_lp-1:0] cfg_bus_li;
   assign cfg_bus_li = cfg_bus_cast_li;
 
   logic mem_cmd_v_lo, mem_resp_v_lo;
-  logic mem_cmd_ready_lo, mem_resp_yumi_li;
+  logic mem_cmd_yumi_li, mem_cmd_ready_and_lo, mem_resp_yumi_li;
   bp_bedrock_cce_mem_msg_s mem_cmd_lo, mem_resp_lo;
 
   logic [trace_replay_data_width_lp-1:0] trace_data_lo;
@@ -54,14 +91,14 @@ module testbench
   logic [trace_replay_data_width_lp-1:0] trace_data_li;
   logic trace_v_li, trace_ready_lo;
 
-  logic [instr_width_p-1:0] icache_data_lo;
+  logic [instr_width_gp-1:0] icache_data_lo;
   logic icache_data_v_lo;
 
   logic [trace_rom_addr_width_lp-1:0] trace_rom_addr_lo;
   logic [trace_replay_data_width_lp+3:0] trace_rom_data_li;
 
   logic [vaddr_width_p-1:0] vaddr_li;
-  logic [ptag_width_lp-1:0] ptag_li;
+  logic [ptag_width_p-1:0] ptag_li;
   logic uncached_li;
 
   logic switch_cce_mode;
@@ -74,9 +111,10 @@ module testbench
     cfg_bus_cast_li.cce_mode = e_cce_mode_normal;
   end
 
-  assign ptag_li = trace_data_lo[0+:(ptag_width_lp)];
-  assign vaddr_li = trace_data_lo[ptag_width_lp+:vaddr_width_p];
-  assign uncached_li = trace_data_lo[(ptag_width_lp+vaddr_width_p)+:1];
+  assign ptag_li       = trace_data_lo[0+:(ptag_width_p)];
+  assign vaddr_li      = trace_data_lo[ptag_width_p+:vaddr_width_p];
+  assign uncached_li   = trace_data_lo[(ptag_width_p+vaddr_width_p)+:1];
+  assign nonidem_li    = '0;
   assign trace_yumi_li = trace_v_lo & dut_ready_lo;
 
   // Trace replay
@@ -125,7 +163,7 @@ module testbench
 
   // Output FIFO
   logic fifo_yumi_li, fifo_v_lo, fifo_random_yumi_lo;
-  logic [instr_width_p-1:0] fifo_data_lo;
+  logic [instr_width_gp-1:0] fifo_data_lo;
   assign fifo_yumi_li = fifo_random_yumi_lo & trace_ready_lo;
   assign trace_v_li = fifo_yumi_li;
   assign trace_data_li = {'0, fifo_data_lo};
@@ -145,7 +183,7 @@ module testbench
   // This fifo has 16 elements since maximum number of streaming hits is 16
   // Probably a side effect of the testing strategy.  Open for debate
   bsg_fifo_1r1w_small
-    #(.width_p(instr_width_p)
+    #(.width_p(instr_width_gp)
      ,.els_p(16)
     )
     output_fifo
@@ -168,7 +206,7 @@ module testbench
    #(.bp_params_p(bp_params_p)
     ,.uce_p(uce_p)
    )
-   dut
+   wrapper
     (.clk_i(clk_i)
      ,.reset_i(reset_i)
 
@@ -182,6 +220,7 @@ module testbench
      ,.ptag_v_i(trace_v_lo)
 
      ,.uncached_i(uncached_li)
+     ,.nonidem_i(nonidem_li)
      ,.data_o(icache_data_lo)
      ,.data_v_o(icache_data_v_lo)
 
@@ -191,19 +230,16 @@ module testbench
 
      ,.mem_cmd_o(mem_cmd_lo)
      ,.mem_cmd_v_o(mem_cmd_v_lo)
-     ,.mem_cmd_ready_i(mem_cmd_ready_lo)
+     ,.mem_cmd_yumi_i(mem_cmd_yumi_li)
     );
+  assign mem_cmd_yumi_li = mem_cmd_ready_and_lo & mem_cmd_v_lo;
 
   // Memory
-  bp_mem
+  bp_nonsynth_mem
    #(.bp_params_p(bp_params_p)
-     ,.mem_offset_p(mem_offset_p)
-     ,.mem_load_p(1)
-     ,.mem_file_p(mem_file_p)
-     ,.mem_cap_in_bytes_p(mem_cap_in_bytes_p)
-     ,.use_ddr_p(0)
-     ,.use_dramsim3_p(0)
-     ,.dram_fixed_latency_p(dram_fixed_latency_p)
+     ,.preload_mem_p(1)
+     ,.dram_type_p(dram_type_p)
+     ,.mem_els_p(2**20)
      )
     mem
     (.clk_i(clk_i)
@@ -211,7 +247,7 @@ module testbench
 
     ,.mem_cmd_i(mem_cmd_lo)
     ,.mem_cmd_v_i(mem_cmd_v_lo)
-    ,.mem_cmd_ready_o(mem_cmd_ready_lo)
+    ,.mem_cmd_ready_and_o(mem_cmd_ready_and_lo)
 
     ,.mem_resp_o(mem_resp_lo)
     ,.mem_resp_v_o(mem_resp_v_lo)
@@ -225,10 +261,10 @@ module testbench
   bind bp_fe_icache
     bp_nonsynth_cache_tracer
     #(.bp_params_p(bp_params_p)
-     ,.assoc_p(icache_assoc_p)
-     ,.sets_p(icache_sets_p)
-     ,.block_width_p(icache_block_width_p)
-     ,.fill_width_p(icache_fill_width_p)
+     ,.assoc_p(assoc_p)
+     ,.sets_p(sets_p)
+     ,.block_width_p(block_width_p)
+     ,.fill_width_p(fill_width_p)
      ,.trace_file_p("icache"))
     icache_tracer
       (.clk_i(clk_i & (testbench.icache_trace_p == 1))
@@ -278,9 +314,9 @@ module testbench
     bind bp_lce
       bp_me_nonsynth_lce_tracer
        #(.bp_params_p(bp_params_p)
-         ,.sets_p(icache_sets_p)
-         ,.assoc_p(icache_assoc_p)
-         ,.block_width_p(icache_block_width_p)
+         ,.sets_p(sets_p)
+         ,.assoc_p(assoc_p)
+         ,.block_width_p(block_width_p)
          )
        bp_lce_tracer
          (.clk_i(clk_i & (testbench.lce_trace_p == 1))
@@ -289,16 +325,16 @@ module testbench
           ,.lce_id_i(lce_id_i)
           ,.lce_req_i(lce_req_o)
           ,.lce_req_v_i(lce_req_v_o)
-          ,.lce_req_ready_i(lce_req_ready_i)
+          ,.lce_req_ready_then_i(lce_req_ready_then_i)
           ,.lce_resp_i(lce_resp_o)
           ,.lce_resp_v_i(lce_resp_v_o)
-          ,.lce_resp_ready_i(lce_resp_ready_i)
+          ,.lce_resp_ready_then_i(lce_resp_ready_then_i)
           ,.lce_cmd_i(lce_cmd_i)
           ,.lce_cmd_v_i(lce_cmd_v_i)
           ,.lce_cmd_yumi_i(lce_cmd_yumi_o)
           ,.lce_cmd_o_i(lce_cmd_o)
           ,.lce_cmd_o_v_i(lce_cmd_v_o)
-          ,.lce_cmd_o_ready_i(lce_cmd_ready_i)
+          ,.lce_cmd_o_ready_then_i(lce_cmd_ready_then_i)
           );
 
     bind bp_cce_fsm
@@ -342,7 +378,7 @@ module testbench
 
      ,.mem_cmd_i(mem_cmd_lo)
      ,.mem_cmd_v_i(mem_cmd_v_lo)
-     ,.mem_cmd_ready_i(mem_cmd_ready_lo)
+     ,.mem_cmd_ready_and_i(mem_cmd_ready_and_lo)
 
      ,.mem_resp_i(mem_resp_lo)
      ,.mem_resp_v_i(mem_resp_v_lo)
@@ -351,5 +387,15 @@ module testbench
 
   if(cce_block_width_p != icache_block_width_p)
     $error("Memory fetch block width does not match icache block width");
+  
+  `ifndef VERILATOR
+    initial
+      begin      
+        $assertoff();
+        @(posedge clk_i);
+        @(negedge reset_i);
+        $asserton();
+      end
+  `endif
 
 endmodule

@@ -1,7 +1,9 @@
 
+`include "bp_common_defines.svh"
+`include "bp_top_defines.svh"
+
 module bp_nonsynth_host
  import bp_common_pkg::*;
- import bp_common_aviary_pkg::*;
  import bp_be_pkg::*;
  import bsg_noc_pkg::*;
  import bp_me_pkg::*;
@@ -28,7 +30,7 @@ module bp_nonsynth_host
 
    , input [cce_mem_msg_width_lp-1:0]        io_cmd_i
    , input                                   io_cmd_v_i
-   , output logic                            io_cmd_ready_o
+   , output logic                            io_cmd_ready_and_o
 
    , output logic [cce_mem_msg_width_lp-1:0] io_resp_o
    , output logic                            io_resp_v_o
@@ -102,7 +104,7 @@ module bp_nonsynth_host
 
      ,.data_i(io_cmd_li)
      ,.v_i(io_cmd_v_i)
-     ,.ready_o(io_cmd_ready_o)
+     ,.ready_o(io_cmd_ready_and_o)
 
      ,.data_o(io_cmd_lo)
      ,.v_o(io_cmd_v_lo)
@@ -110,14 +112,14 @@ module bp_nonsynth_host
      );
   assign io_resp_v_o = io_cmd_v_lo;
   assign io_cmd_yumi_li = io_resp_yumi_i;
-  wire [2:0] domain_id = io_cmd_lo.header.addr[paddr_width_p-1-:3];
+  wire [2:0] hio_id = io_cmd_lo.header.addr[paddr_width_p-1-:3];
 
 
   logic putchar_data_cmd_v;
   logic getchar_data_cmd_v;
   logic finish_data_cmd_v;
   logic bootrom_data_cmd_v;
-  logic domain_data_cmd_v;
+  logic hio_data_cmd_v;
   logic putch_core_data_cmd_v;
 
   always_comb
@@ -126,16 +128,16 @@ module bp_nonsynth_host
       getchar_data_cmd_v = 1'b0;
       finish_data_cmd_v = 1'b0;
       bootrom_data_cmd_v = 1'b0;
-      domain_data_cmd_v = io_cmd_v_lo & (domain_id != '0);
+      hio_data_cmd_v = io_cmd_yumi_li & (hio_id != '0);
       putch_core_data_cmd_v = 1'b0;
 
       unique
       casez (io_cmd_lo.header.addr)
-        putchar_base_addr_gp: putchar_data_cmd_v = io_cmd_v_lo;
-        getchar_base_addr_gp: getchar_data_cmd_v = io_cmd_v_lo;
-        finish_base_addr_gp : finish_data_cmd_v = io_cmd_v_lo;
-        bootrom_base_addr_gp: bootrom_data_cmd_v = io_cmd_v_lo;
-        putch_core_base_addr_gp: putch_core_data_cmd_v = io_cmd_v_lo;
+        putchar_base_addr_gp: putchar_data_cmd_v = io_cmd_yumi_li;
+        getchar_base_addr_gp: getchar_data_cmd_v = io_cmd_yumi_li;
+        finish_base_addr_gp : finish_data_cmd_v = io_cmd_yumi_li;
+        bootrom_base_addr_gp: bootrom_data_cmd_v = io_cmd_yumi_li;
+        putch_core_base_addr_gp: putch_core_data_cmd_v = io_cmd_yumi_li;
         default: begin end
       endcase
     end
@@ -198,8 +200,8 @@ module bp_nonsynth_host
       if (getchar_data_cmd_v)
         pop();
 
-      if (io_cmd_v_i & (domain_id != '0))
-        $display("Warning: Accesing illegal domain %0h. Sending loopback message!", domain_id);
+      if (io_cmd_v_i & (hio_id != '0))
+        $display("Warning: Accesing illegal hio %0h. Sending loopback message!", hio_id);
       for (integer i = 0; i < num_core_p; i++)
         begin
           // PASS when returned value in finish packet is zero
@@ -221,11 +223,11 @@ module bp_nonsynth_host
   localparam lg_bootrom_els_lp = `BSG_SAFE_CLOG2(bootrom_els_p);
   // bit helps with x pessimism with undersized bootrom
   bit [lg_bootrom_els_lp-1:0] bootrom_addr_li;
-  bit [dword_width_p-1:0] bootrom_data_lo;
+  bit [dword_width_gp-1:0] bootrom_data_lo;
   assign bootrom_addr_li = io_cmd_lo.header.addr[3+:lg_bootrom_els_lp];
   bsg_nonsynth_test_rom
    #(.filename_p("bootrom.mem")
-     ,.data_width_p(dword_width_p)
+     ,.data_width_p(dword_width_gp)
      ,.addr_width_p(lg_bootrom_els_lp)
      ,.hex_not_bin_p(1)
      )
@@ -234,26 +236,29 @@ module bp_nonsynth_host
      ,.data_o(bootrom_data_lo)
      );
 
-  logic [dword_width_p-1:0] bootrom_final_lo;
+  // Convert to little endian
+  wire [dword_width_gp-1:0] bootrom_data_reverse = {<<8{bootrom_data_lo}};
+
+  logic [dword_width_gp-1:0] bootrom_final_lo;
   bsg_bus_pack
-   #(.width_p(dword_width_p))
+   #(.width_p(dword_width_gp))
    bootrom_pack
-    (.data_i(bootrom_data_lo)
+    (.data_i(bootrom_data_reverse)
      ,.size_i(io_cmd_lo.header.size[0+:2])
      ,.sel_i(io_cmd_lo.header.addr[0+:3])
      ,.data_o(bootrom_final_lo)
      );
 
-  bp_bedrock_cce_mem_msg_s host_io_resp_lo, domain_io_resp_lo, bootrom_io_resp_lo;
+  bp_bedrock_cce_mem_msg_s host_io_resp_lo, hio_io_resp_lo, bootrom_io_resp_lo;
 
   assign host_io_resp_lo = '{header: io_cmd_lo.header, data: ch};
-  assign domain_io_resp_lo = '{header: io_cmd_lo.header, data: '0};
+  assign hio_io_resp_lo = '{header: io_cmd_lo.header, data: '0};
   assign bootrom_io_resp_lo = '{header: io_cmd_lo.header, data: bootrom_final_lo};
 
   assign io_resp_cast_o = bootrom_data_cmd_v
                           ? bootrom_io_resp_lo
-                          : domain_data_cmd_v
-                            ? domain_io_resp_lo
+                          : hio_data_cmd_v
+                            ? hio_io_resp_lo
                             : host_io_resp_lo;
 
   // TODO: Add dynamic enable

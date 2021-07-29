@@ -1,7 +1,9 @@
 
+`include "bp_common_defines.svh"
+`include "bp_me_defines.svh"
+
 module bp_me_cce_to_mem_link_bidir
  import bp_common_pkg::*;
- import bp_common_aviary_pkg::*;
  import bp_me_pkg::*;
  #(parameter bp_params_e bp_params_p = e_bp_default_cfg
   `declare_bp_proc_params(bp_params_p)
@@ -29,7 +31,7 @@ module bp_me_cce_to_mem_link_bidir
    // Master link
    , input  [cce_mem_msg_width_lp-1:0]            mem_cmd_i
    , input                                        mem_cmd_v_i
-   , output                                       mem_cmd_ready_o
+   , output                                       mem_cmd_ready_and_o
 
    , output [cce_mem_msg_width_lp-1:0]            mem_resp_o
    , output                                       mem_resp_v_o
@@ -42,7 +44,7 @@ module bp_me_cce_to_mem_link_bidir
 
    , input [cce_mem_msg_width_lp-1:0]             mem_resp_i
    , input                                        mem_resp_v_i
-   , output                                       mem_resp_ready_o
+   , output                                       mem_resp_ready_and_o
 
    // NOC interface
    , input [bsg_ready_and_link_sif_width_lp-1:0]  cmd_link_i
@@ -95,7 +97,7 @@ bp_me_cce_to_mem_link_master
 
   ,.mem_cmd_i(mem_cmd_i)
   ,.mem_cmd_v_i(mem_cmd_v_i)
-  ,.mem_cmd_ready_o(mem_cmd_ready_o)
+  ,.mem_cmd_ready_and_o(mem_cmd_ready_and_o)
 
   ,.mem_resp_o(mem_resp_o)
   ,.mem_resp_v_o(mem_resp_v_o)
@@ -128,7 +130,7 @@ bp_me_cce_to_mem_link_client
 
   ,.mem_resp_i(mem_resp_i)
   ,.mem_resp_v_i(mem_resp_v_i)
-  ,.mem_resp_ready_o(mem_resp_ready_o)
+  ,.mem_resp_ready_and_o(mem_resp_ready_and_o)
 
   ,.cmd_link_i(client_cmd_link_li)
   ,.resp_link_o(client_resp_link_lo)

@@ -2,9 +2,11 @@
 
 // This is helper module to convert a coordinate into a set of ids. It assumes that
 //   the SoC topology is a fixed 2d mesh with a set mapping.  Should be made more flexible
+`include "bp_common_defines.svh"
+`include "bp_me_defines.svh"
+
 module bp_me_cord_to_id
  import bp_common_pkg::*;
- import bp_common_aviary_pkg::*;
  #(parameter bp_params_e bp_params_p = e_bp_default_cfg
    `declare_bp_proc_params(bp_params_p)
    )
@@ -39,7 +41,7 @@ module bp_me_cord_to_id
   wire cord_in_sac_li = (xcord_li < sac_x_dim_p);
   wire cord_in_io_li  = (ycord_li < ic_y_dim_p);
 
-  assign core_id_o = cce_id_o;
+  assign core_id_o = cce_id_o[0+:core_id_width_p];
   always_comb
     if (cord_in_cc_li)
       begin

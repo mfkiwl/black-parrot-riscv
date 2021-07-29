@@ -4,75 +4,18 @@ variables:
 
 ## CI Stages:
 #    manual: Manual jobs used to do CI maintainance, like wiping the directory or clearing cache
-#    prep  : Jobs to ensure the repo is up to date with tools and progs
+#    prep  : Jobs to ensure the repo is up to date with tools, prog and ucode
 #    check : Sanity checks of RTL quality
 #    test-short :
 #    test-medium:
 #    test-long  : Functional RTL tests
 stages:
   - manual
-  - prep
   - check
   - test-short
   - test-medium
   - test-long
   - test-ultralong
-
-clean_all:
-  when: manual
-  stage: manual
-  tags:
-    - bsg
-  script:
-      - git clean -fdx
-
-bleach_all:
-  when: manual
-  stage: manual
-  tags:
-    - bsg
-  script:
-    - git submodule deinit -f .
-    - git clean -fdx
-  cache:
-    key: $CI_COMMIT_REF_SLUG
-    paths:
-      - $CI_PROJECT_DIR/bp_common/test/mem
-      - $CI_PROJECT_DIR/external/bin
-      - $CI_PROJECT_DIR/external/lib
-      - $CI_PROJECT_DIR/external/lib64
-      - $CI_PROJECT_DIR/external/lib-linux64
-      - $CI_PROJECT_DIR/external/libexec
-      - $CI_PROJECT_DIR/external/include
-      - $CI_PROJECT_DIR/external/riscv64-unknown-elf-dramfs
-      - $CI_PROJECT_DIR/external/share
-      - $CI_PROJECT_DIR/external/touchfiles
-    policy: push
-
-update-cache: &update-cache-manual
-  when: manual
-  stage: manual
-  tags:
-    - bsg
-  script:
-    - git submodule deinit -f .
-    - git submodule sync
-    - make prep -j $CI_CORES > make_prep.log
-    - make tidy_tools > make_tidy_tools.log
-  cache:
-    key: $CI_COMMIT_REF_SLUG
-    paths:
-      - $CI_PROJECT_DIR/bp_common/test/mem
-      - $CI_PROJECT_DIR/external/bin
-      - $CI_PROJECT_DIR/external/lib
-      - $CI_PROJECT_DIR/external/lib64
-      - $CI_PROJECT_DIR/external/lib-linux64
-      - $CI_PROJECT_DIR/external/libexec
-      - $CI_PROJECT_DIR/external/include
-      - $CI_PROJECT_DIR/external/riscv64-unknown-elf-dramfs
-      - $CI_PROJECT_DIR/external/share
-      - $CI_PROJECT_DIR/external/touchfiles
-    policy: push
 
 .job_template: &job_definition
   only:
@@ -83,16 +26,12 @@ update-cache: &update-cache-manual
     - me_dev
     - top_dev
     - sw_dev
-    - me_dev_fix_ci
+    - be_dev_dcachetemptemptmep
   before_script:
-    - echo "Forcefully updating submodules"
-    - git submodule update --init --force
-    - echo "Making CCE ucode"
-    - make ucode > make_ucode.log
+      - git submodule update --init --checkout --recursive external/
   artifacts:
     when: always
     paths:
-      - "*.log"
       - "bp_fe/syn/reports/"
       - "bp_be/syn/reports/"
       - "bp_me/syn/reports/"
@@ -101,72 +40,16 @@ update-cache: &update-cache-manual
       - "bp_be/syn/logs/"
       - "bp_me/syn/logs/"
       - "bp_top/syn/logs/"
-  cache: &global_cache
-    key: $CI_COMMIT_REF_SLUG
-    paths:
-      - $CI_PROJECT_DIR/bp_common/test/mem
-      - $CI_PROJECT_DIR/external/bin
-      - $CI_PROJECT_DIR/external/lib
-      - $CI_PROJECT_DIR/external/lib64
-      - $CI_PROJECT_DIR/external/lib-linux64
-      - $CI_PROJECT_DIR/external/libexec
-      - $CI_PROJECT_DIR/external/include
-      - $CI_PROJECT_DIR/external/riscv64-unknown-elf-dramfs
-      - $CI_PROJECT_DIR/external/share
-      - $CI_PROJECT_DIR/external/touchfiles
-    policy: pull
+#  cache: &global_cache
+#    key: $CI_COMMIT_REF_SLUG
+#    paths:
+#      - $CI_PROJECT_DIR/sdk
+#    policy: pull
   dependencies: []
   retry:
     max: 2
     when:
       - script_failure
-
-prep:
-  <<: *job_definition
-  stage: prep
-  tags:
-    - bsg
-  script:
-    - make prep -j $CI_CORES > make_prep.log
-  cache: &global_cache
-    key: $CI_COMMIT_REF_SLUG
-    paths:
-      - $CI_PROJECT_DIR/bp_common/test/mem
-      - $CI_PROJECT_DIR/external/bin
-      - $CI_PROJECT_DIR/external/lib
-      - $CI_PROJECT_DIR/external/libexec
-      - $CI_PROJECT_DIR/external/lib64
-      - $CI_PROJECT_DIR/external/lib-linux64
-      - $CI_PROJECT_DIR/external/libexec
-      - $CI_PROJECT_DIR/external/include
-      - $CI_PROJECT_DIR/external/riscv64-unknown-elf-dramfs
-      - $CI_PROJECT_DIR/external/share
-      - $CI_PROJECT_DIR/external/touchfiles
-    policy: pull-push
-
-## This job runs on fix branches only. We generally assume fix branches do not have major
-#    architectural changes that need to be thoroughly tested. Simply checking synthesizability
-#    susses out most typos.
-# TODO: This target is not super useful, but consumes a lot of CI cycles...
-#fix_job:
-#  only:
-#    - /^.*fix.*$/
-#  stage: check
-#  tags:
-#    - bsg
-#    - vcs
-#  script:
-#    - $CI_PROJECT_DIR/ci/check_design.sh
-#    - make -C bp_top/syn clean
-#  cache:
-#    key: "dev"
-#    paths:
-#      - $CI_PROJECT_DIR/external/
-#    policy: pull
-#  artifacts:
-#    when: always
-#    paths:
-#      - "bp_top/syn/reports/"
 
 check-design:
   <<: *job_definition
@@ -176,9 +59,11 @@ check-design:
   script:
     - $CI_PROJECT_DIR/ci/check_design.sh $CI_CORES
 
+# Some licensing issue as of 02/10/21
 synth-vivado:
   <<: *job_definition
   stage: check
+  allow_failure: true
   tags:
     - vivado
   script:
@@ -201,11 +86,12 @@ lint-vcs:
     - $CI_PROJECT_DIR/ci/lint.sh vcs $CI_CORES
 
 tire_kick:
+  <<: *job_definition
   stage: check
   tags:
     - verilator
   script:
-    - $CI_PROJECT_DIR/ci/tire_kick.sh
+    - $CI_PROJECT_DIR/ci/tire_kick.sh $CI_CORES
 
 bloodgraph-vcs:
   <<: *job_definition
@@ -215,7 +101,6 @@ bloodgraph-vcs:
   script:
     - $CI_PROJECT_DIR/ci/bloodgraph.sh $CI_CORES
 
-# Takes too long to build
 weird-verilator:
   <<: *job_definition
   when: manual
@@ -243,6 +128,7 @@ l2e-vcs:
 
 l2e-verilator:
   <<: *job_definition
+  when: manual
   stage: test-medium
   tags:
     - verilator
@@ -251,6 +137,7 @@ l2e-verilator:
 
 me-regress-verilator:
   <<: *job_definition
+  when: manual
   stage: test-short
   tags:
     - verilator
@@ -297,6 +184,23 @@ top-riscv-tests-vcs:
   script:
     - $CI_PROJECT_DIR/ci/single_core_testlist.sh vcs RISCV_TESTLIST $CI_CORES
 
+top-amo-tests-verilator:
+  <<: *job_definition
+  when: manual
+  stage: test-short
+  tags:
+    - verilator
+  script:
+    - $CI_PROJECT_DIR/ci/single_core_atomics.sh verilator $CI_CORES
+
+top-amo-tests-vcs:
+  <<: *job_definition
+  stage: test-short
+  tags:
+    - vcs
+  script:
+    - $CI_PROJECT_DIR/ci/single_core_atomics.sh vcs $CI_CORES
+
 dcache-vcs:
   <<: *job_definition
   stage: test-short
@@ -339,6 +243,7 @@ top-misc-vcs:
 
 top-misc-verilator:
   <<: *job_definition
+  when: manual
   stage: test-medium
   tags:
     - verilator
@@ -347,8 +252,8 @@ top-misc-verilator:
 
 top-riscvdv-vcs:
   <<: *job_definition
+  when: manual
   stage: test-medium
-  allow_failure: true
   tags:
     - vcs
   script:
@@ -380,8 +285,10 @@ check-loops:
   script:
     - $CI_PROJECT_DIR/ci/check_loops.sh $CI_CORES
 
+# Pending https://github.com/bespoke-silicon-group/basejump_stl/pull/387/
 top-dram-vcs:
   <<: *job_definition
+  when: manual
   stage: test-medium
   tags:
     - vcs
@@ -399,6 +306,7 @@ top-linux-verilator:
 
 top-coremark-verilator:
   <<: *job_definition
+  when: manual
   stage: test-long
   tags:
     - verilator
@@ -415,6 +323,7 @@ top-coremark-vcs:
 
 top-beebs-verilator:
   <<: *job_definition
+  when: manual
   stage: test-long
   tags:
     - verilator
