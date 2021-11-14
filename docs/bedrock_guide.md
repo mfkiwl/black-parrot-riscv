@@ -27,7 +27,8 @@ for unordered or ordered networks.
 
 BedRock sends and receives messages on three networks, called Request, Command, and Response.
 The messages carried on the BedRock networks are fully defined in the
-[ME Interface](../bp_common/src/include/bp_common_me_if.vh) file of the BlackParrot repository.
+[ME Interface](../bp_common/src/include/bp_common_bedrock_if.svh) file of the BlackParrot repository.
+
 The [BlackParrot Interface Specification](interface_specification.md) contains a more detailed
 overview of the messages carried by the BedRock coherence networks, which are briefly overviewed
 here.
@@ -64,7 +65,7 @@ shadow tags directory design. The key difference between BedRock and a canonical
 directory is that in BedRock it is the directory (CCE), not the local caches (LCE), that maintains
 and manages the golden copy of the tags. The local caches (LCEs) hold shadow tags and are only
 allowed to modify their coherence state when instructed to do so by the directory (CCE). The
-directory full controls all coherence state changes and cache block replacements in all of the
+directory fully controls all coherence state changes and cache block replacements in all of the
 LCEs. This design decision eliminates a number of races from the coherence protocol, greatly
 simplifying the implementation of the LCEs and CCE. Cache requests for the same block from
 different LCEs may race to the directory, but are serialized by the network and are processed
