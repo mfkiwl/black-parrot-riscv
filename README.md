@@ -1,6 +1,6 @@
 ![BlackParrot Logo](docs/bp_logo.png)
 
-# BlackParrot: A Linux-Capable Accelerator Host RISC-V Multicore [![License](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause) [![Gitlab CI](https://gitlab.com/black-parrot/black-parrot/badges/master/pipeline.svg)](https://gitlab.com/black-parrot/black-parrot/pipelines) [![Contributers](https://img.shields.io/github/contributors/black-parrot/black-parrot.svg?style=flat)]() [![Twitter Follow](https://img.shields.io/twitter/follow/BlackParrotCore.svg?style=social)](https://twitter.com/BlackParrotCore) [![Join the chat at https://gitter.im/black-parrot/rtl](https://badges.gitter.im/black-parrot/rtl.svg)](https://gitter.im/black-parrot/rtl?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+# BlackParrot: A Linux-Capable Accelerator Host RISC-V Multicore [![License](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause) [![Gitlab CI](https://gitlab.com/black-parrot/black-parrot/badges/master/pipeline.svg)](https://gitlab.com/black-parrot/black-parrot/pipelines) [![Contributers](https://img.shields.io/github/contributors/black-parrot/black-parrot.svg?style=flat)]() [![Twitter Follow](https://img.shields.io/twitter/follow/BlackParrotCore.svg?style=social)](https://twitter.com/BlackParrotCore)
 
 BlackParrot aims to be the default open-source, Linux-capable, cache-coherent, RV64GC multicore used by the world. Although originally developed by the University of Washington and Boston University, BlackParrot strives to be community-driven and infrastructure agnostic, a core which is Pareto optimal in terms of power, performance, area and complexity. In order to ensure BlackParrot is easy to use, integrate, modify and trust, development is guided by three core principles: Be Tiny, Be Modular, and Be Friendly. Development efforts have prioritized ease of use and silicon validation as first order design metrics, so that users can quickly get started and trust that their results will be representative of state-of-the-art ASIC designs. BlackParrot is ideal as the basis for a lightweight accelerator host, a standalone Linux core, or as a hardware research platform.
 
@@ -13,11 +13,15 @@ BlackParrot aims to be the default open-source, Linux-capable, cache-coherent, R
     - Combat NIH, welcome external contributions and strive for infrastructure agnosticism.
 
 ## Project Status
-BlackParrot v 1.0 was released in March 2020 and has been up and quad core silicon has been running in the lab since April 2020. It supports configurations scaling up to a 16-core cache coherent multicore, including the baseline user and privilege mode functionality to run Linux. An optimized single core variant of BlackParrot (also Linux-capable) is also available. Currently, the core supports RV64IMAFD, with C support on the way!
+BlackParrot v1.0 was released in March 2020 and has been up and quad core silicon has been running in the lab since April 2020. It supports configurations scaling up to a 16-core+ cache coherent multicore, including the baseline user and privilege mode functionality to run Linux. An optimized single core variant of BlackParrot (also Linux-capable) is also available. Currently, the core supports RV64IMAFDCBSU_Zfencei_Zicsr_Zcbo.
 
 Development of BlackParrot continues, and we are very excited about what we are releasing next!
 
-A 12nm BlackParrot multicore chip was taped out in July 2019.
+A 12nm quad-core BlackParrot multicore chip was taped out in July 2019.
+
+A 12nm BlackParrot dual-core accelerator host was taped out in July 2020.
+
+A 28nm heterogeneous dual-core BlackParrot was taped out in August 2022.
 
 ## Press
 We presented BlackParrot at the December 2020 RISC-V Summit! [slides](https://drive.google.com/file/d/1JPIidbk4pTuCgfV8uXorm-SdgOlQ0gTM/view?usp=sharing)
@@ -27,13 +31,13 @@ We presented BlackParrot at the ICS 2020 Workshop on RISC-V and OpenPOWER! [slid
 We first announced BlackParrot at FOSDEM 2020! [slides](https://fosdem.org/2020/schedule/event/riscv_blackparrot/attachments/slides/3718/export/events/attachments/riscv_blackparrot/slides/3718/Talk_Slides) [video](https://video.fosdem.org/2020/K.3.401/riscv_blackparrot.mp4) [pdf](https://drive.google.com/file/d/16BXCT1kK3gQ0XKfZPR-K8Zs2E648qFp9/view?usp=sharing)
 
 ## Getting Started
-This RTL repo is intended to be used with a specific SDK and HDK depending on the simulation / FPGA /
+This RTL repo is intended to be used with a specific [SDK](https://github.com/black-parrot-sdk/) and [HDK](https://github.com/black-parrot-hdk/) depending on the simulation / FPGA /
 ASIC environment desired. For first-time users of BlackParrot, we recommend starting from the [BlackParrot
 Simulation Environment](https://github.com/black-parrot/black-parrot-sim), which packages the
 BlackParrot RTL and SDK in a compatible manner. We intend to release several examples of BlackParrot
 environments which package the RTL, SDK and HDK together for evaluation.
 
-To set up your own BlackParrot environment, cloning a version of the [BlackParrot SDK](https://github.com/black-parrot-sdk/black-parrot-sdk) as 'sdk' in the same directory as the BlackParrot RTL is all that is strictly required, although the repositories are not guaranteed to be in sync after pulling from master of each.
+To set up your own BlackParrot environment, cloning a version of the [BlackParrot SDK](https://github.com/black-parrot-sdk/black-parrot-sdk) and a version of the [BlackParrot Tools](https://github.com/black-parrot/black-parrot-tools) in the same directory as this repository is all that is strictly required, although the repositories are not guaranteed to be in sync after pulling from master of each.
 
 Once you have a BlackParrot environment set up, you can follow the RTL evaluation guide here to
 test the core RTL: [Evaluation Guide](docs/eval_guide.md)
@@ -61,18 +65,18 @@ Once you've built and validate your BlackParrot program and are ready to run on 
 [Accelerator Guide](docs/accelerator_guide.md)
 
 ## Hardware Development Kit
-Coming Soon!
+[BlackParrot Subsystems](https://github.com/black-parrot-hdk/black-parrot-subsystems)
 
 ## Interface Specification
-
 BlackParrot heavily leverages the [BaseJump STL](https://github.com/bespoke-silicon-group/basejump_stl) library and builds upon many of the hardware design conventions from the corresponding [BSG SystemVerilog Coding Guidelines](https://docs.google.com/document/d/1xA5XUzBtz_D6aSyIBQUwFk_kSUdckrfxa2uzGjMgmCU/edit#) which can aid in understanding how BlackParrot source code works.
 
 BlackParrot is an aggressively modular design: communication between the components is performed over a set of narrow, latency-insensitive interfaces. The interfaces are designed to allow implementations of the various system components to change independently of one another, without worrying about cascading functional or timing effects. Read more about BlackParrot's standardized interfaces here: [Interface Specification](docs/interface_specification.md)
 
-## BedRock Coherence System Guide
-The BedRock coherence system maintains cache coherence between the BlackParrot processor cores and attached
-coherent accelerators in a BlackParrot multicore system. Please see the [BedRock Coherence Protocol](docs/bedrock_coherence_protocol.md)
-page for more details on the coherence protocol and system.
+## BedRock Cache Coherence System Guide
+The BedRock coherence system maintains cache coherence between the BlackParrot processor cores and
+attached coherent accelerators in a BlackParrot multicore system. Please see the
+[BedRock Cache Coherence System Guide](docs/bedrock_guide.md) page for more details on the cache
+coherence protocol and its implementation in BlackParrot.
 
 ## Microarchitecture Guide
 [Microarchitecture Guide](docs/microarchitecture_guide.md)
@@ -93,8 +97,7 @@ Upon commit to the listed branch, a functional regression consisting of full-sys
 
 Our goal with BlackParrot is to bootstrap a community-maintained RISC-V core, and we would love for you to get involved. Here are a few starter projects you could do to get your feet wet! Contact us more for details.
 
-- Our integer divider could be parameterized to do 2 or more cycles per iteration, or to skip zeros. (Note: Currently somebody is working on this.)
-- We would like to configure BlackParrot for ultra-tiny caches (e.g. 8-way set associative, 4 sets, 2 word = 16 byte cache lines)
+- Our integer divider could be parameterized to iterate faster on smaller numbers. (Note: Currently somebody is working on this.)
 - We could use a stream buffer (prefetcher) implementation for our L2 cache.
 - Add a parameter to enable / disable FPU logic (including register file, bypass paths, FP divider and FMAC, etc.)
 - Improve the mapping to FPGA 
@@ -104,6 +107,24 @@ Our goal with BlackParrot is to bootstrap a community-maintained RISC-V core, an
 - We always appreciate pull requests to fix bugs in the documentation, or bug reports that instructions don't work correctly.
 - The RISC-V GCC compiler has some inefficiencies that we have identified, if you have compiler experience you could raise the benchmark numbers for all RISC-V cores versus other ISA's!
 - Our current L2 cache implementation (bsg\_cache) is blocking. We would like a non-blocking implementation that supports the same interface and features as the current one, so that can be a configuration option for BlackParrot. It may even be possible to reuse the current code. Contact us to discuss possible implementation approaches! This is an advanced project, after you have already completed an intermediate project.
+
+## Have us help you out
+
+We're happy to help advise BlackParrot projects, but have limited bandwidth for technical support.
+Please read all documentation carefully and follow all user guides. We only offically support Centos 7 and Ubuntu 20.04 so
+we cannot troubleshoot environment issues on other OSes. We appreciate PRs to clarify and correct documentation!
+
+Upon finding an issue, the procedure should be:
+- Attempt the build in a container using the Docker image in [black-parrot-sim](https://github.com/black-parrot/black-parrot-sim), following all documented instructions. Make sure the issue does not exist solely on your machine.
+- After confirming it is not an environment issue, trace the error to the earliest source. For instance, "./simsc not found" means that we should check why simsc is not getting built in an earlier step.
+- Search the internet for the root error and attempt solutions from Stack Overflow, EDAboard, or other public forums. Chances are you are not the first to run into it.
+- Raise a Github issue with the results of your search. Include the root error, your debugging steps and any proposed solutions.
+- Work with maintainers to determine a solution and contribute back to the community by providing the fix.
+
+Due to our open-source nature, we greatly prefer answering questions in the open via
+Github issues, so that others can benefit from the knowledge. Please only send personal emails to
+maintainers for sensitive academic or commercial opportunities (keeping in mind that this is an
+open-source project maintained by energetic but not inexhaustible volunteers).
 
 ## Attribution
 If used for academic research, please cite:

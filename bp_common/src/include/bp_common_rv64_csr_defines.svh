@@ -211,8 +211,17 @@
   typedef logic [63:0] rv64_sscratch_s;                                                    \
   typedef logic [63:0] bp_sscratch_s;                                                      \
                                                                                            \
-  typedef logic [63:0] rv64_sepc_s;                                                        \
-  typedef logic [`BSG_MAX(vaddr_width_mp, paddr_width_mp)-1:0] bp_sepc_s;                  \
+  typedef struct packed                                                                    \
+  {                                                                                        \
+    logic [61:0] word_addr;                                                                \
+    logic [0:0]  align;                                                                    \
+    logic [0:0]  zero;                                                                     \
+  }  rv64_sepc_s;                                                                          \
+  typedef struct packed                                                                    \
+  {                                                                                        \
+    logic [(`BSG_MAX(vaddr_width_mp, paddr_width_mp))-2:0] word_addr;                      \
+    logic [0:0]                                            align;                          \
+  }  bp_sepc_s;                                                                            \
                                                                                            \
   typedef struct packed                                                                    \
   {                                                                                        \
@@ -499,13 +508,22 @@
                                                                                            \
     logic msip;                                                                            \
     logic ssip;                                                                            \
-  }   bp_mip_s;                                                                            \
+  }  bp_mip_s;                                                                             \
                                                                                            \
   typedef logic [63:0] rv64_mtval_s;                                                       \
   typedef logic [`BSG_MAX(vaddr_width_mp, paddr_width_mp)-1:0] bp_mtval_s;                 \
                                                                                            \
-  typedef logic [63:0] rv64_mepc_s;                                                        \
-  typedef logic [`BSG_MAX(vaddr_width_mp, paddr_width_mp)-1:0] bp_mepc_s;                  \
+  typedef struct packed                                                                    \
+  {                                                                                        \
+    logic [61:0] word_addr;                                                                \
+    logic [0:0]  align;                                                                    \
+    logic [0:0]  zero;                                                                     \
+  }  rv64_mepc_s;                                                                          \
+  typedef struct packed                                                                    \
+  {                                                                                        \
+    logic [`BSG_MAX(vaddr_width_mp, paddr_width_mp)-2:0] word_addr;                        \
+    logic [0:0]                                          align;                            \
+  }  bp_mepc_s;                                                                            \
                                                                                            \
   typedef struct packed                                                                    \
   {                                                                                        \
@@ -681,6 +699,7 @@
     logic       stepie;                                                                    \
     logic [3:0] cause;                                                                     \
     logic [1:0] prv;                                                                       \
+    logic       mprven;                                                                    \
     logic       step;                                                                      \
   }  bp_dcsr_s;                                                                            \
                                                                                            \
@@ -708,13 +727,13 @@
   `define compress_scounteren_s(data_cast_mp, vaddr_width_mp, paddr_width_mp) \
     '{ir : data_cast_mp.ir \
       ,cy: data_cast_mp.cy \
-      };
+      }
 
   `define decompress_scounteren_s(data_comp_mp) \
     '{ir : data_comp_mp.ir \
       ,cy: data_comp_mp.cy \
       ,default: '0         \
-      };
+      }
 
   `define compress_sscratch_s(data_cast_mp, vaddr_width_mp, paddr_width_mp) \
     data_cast_mp[0+:64]
@@ -722,13 +741,16 @@
   `define decompress_sscratch_s(data_comp_mp) \
     64'(data_comp_mp)
 
-  `define bp_sepc_width ($bits(bp_sepc_s))
-
   `define compress_sepc_s(data_cast_mp, vaddr_width_mp, paddr_width_mp) \
-    bp_sepc_s'(data_cast_mp[0+:`BSG_MAX(vaddr_width_mp, paddr_width_mp)])
+    '{word_addr: `BSG_SIGN_EXTEND(data_cast_mp.word_addr, 62) \
+      ,align   : data_cast_mp.align                           \
+      }
 
   `define decompress_sepc_s(data_comp_mp) \
-    `BSG_SIGN_EXTEND(data_comp_mp, 64)
+    '{word_addr: `BSG_SIGN_EXTEND(data_comp_mp.word_addr, 62) \
+      ,align   : compressed_support_p && data_comp_mp.align   \
+      ,zero    : 1'b0                                         \
+      }
 
   `define compress_scause_s(data_cast_mp, vaddr_width_mp, paddr_width_mp) \
     '{_interrupt: data_cast_mp._interrupt \
@@ -799,7 +821,7 @@
     '{deleg_15     : data_cast_mp[15]    \
       ,deleg_13to12: data_cast_mp[13:12] \
       ,deleg_9to0  : data_cast_mp[9:0]   \
-      };
+      }
 
   `define decompress_medeleg_s(data_comp_mp) \
     rv64_medeleg_s'({data_comp_mp.deleg_15      \
@@ -807,7 +829,7 @@
                      ,data_comp_mp.deleg_13to12 \
                      ,2'b0                      \
                      ,data_comp_mp.deleg_9to0   \
-                     });
+                     })
 
   `define compress_mideleg_s(data_cast_mp, vaddr_width_mp, paddr_width_mp) \
     '{sei : data_cast_mp.sei \
@@ -860,7 +882,7 @@
   `define compress_mcounteren_s(data_cast_mp, vaddr_width_mp, paddr_width_mp) \
     '{ir : data_cast_mp.ir \
       ,cy: data_cast_mp.cy \
-      };
+      }
 
   `define decompress_mcounteren_s(data_comp_mp) \
     '{ir : data_comp_mp.ir \
@@ -904,10 +926,15 @@
     `BSG_SIGN_EXTEND(data_comp_mp, 64)
 
   `define compress_mepc_s(data_cast_mp, vaddr_width_mp, paddr_width_mp) \
-    bp_mepc_s'(data_cast_mp[0+:`BSG_MAX(vaddr_width_mp, paddr_width_mp)])
+    '{word_addr: `BSG_SIGN_EXTEND(data_cast_mp.word_addr, 62) \
+      ,align   : data_cast_mp.align                           \
+      }
 
   `define decompress_mepc_s(data_comp_mp) \
-    `BSG_SIGN_EXTEND(data_comp_mp, 64)
+    '{word_addr: `BSG_SIGN_EXTEND(data_comp_mp.word_addr, 62) \
+      ,align   : compressed_support_p && data_comp_mp.align   \
+      ,zero    : 1'b0                                         \
+      }
 
   `define compress_pmpcfg_s(data_cast_mp, vaddr_width_mp, paddr_width_mp) \
     '{pmpcfg: data_cast_mp.pmpcfg[0+:4]}
@@ -990,6 +1017,7 @@
       ,cause  : data_cast_mp.cause   \
       ,prv    : data_cast_mp.prv     \
       ,step   : data_cast_mp.step    \
+      ,mprven : data_cast_mp.mprven  \
       }
 
   `define decompress_dcsr_s(data_comp_mp) \
@@ -1001,7 +1029,7 @@
       ,stopcount: 1'b0                  \
       ,stoptime : 1'b0                  \
       ,cause    : data_comp_mp.cause    \
-      ,mprven   : 1'b0                  \
+      ,mprven   : data_comp_mp.mprven   \
       ,nmip     : 1'b0                  \
       ,step     : data_comp_mp.step     \
       ,prv      : data_comp_mp.prv      \

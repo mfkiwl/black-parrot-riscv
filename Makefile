@@ -1,46 +1,35 @@
 TOP ?= $(shell git rev-parse --show-toplevel)
-
-.PHONY: help libs tools_lite tools tools_bsg tidy bleach_all
-
 include $(TOP)/Makefile.common
-include $(TOP)/Makefile.tools
+include $(TOP)/Makefile.env
 
-help:
-	@echo "usage: make [libs, tools, tools_lite, tools_bsg, tidy, bleach_all]"
+include $(BP_RTL_MK_DIR)/Makefile.libs
 
-libs: $(BP_TOOLS_LIB_DIR)/libdramsim3.so
-$(BP_TOOLS_LIB_DIR)/libdramsim3.so:
-	cd $(TOP); git submodule update --init --recursive --checkout $(BASEJUMP_STL_DIR)
-	cd $(TOP); git submodule update --init --recursive --checkout $(HARDFLOAT_DIR)
-	$(MAKE) -C $(BASEJUMP_STL_DIR)/bsg_test -f libdramsim3.mk
-	mkdir -p $(BP_TOOLS_LIB_DIR)
-	cp $(BASEJUMP_STL_DIR)/bsg_test/libdramsim3.so $(BP_TOOLS_LIB_DIR)/libdramsim3.so
+checkout: ## checkout submodules, but not recursively
+	@$(MKDIR) -p $(BP_RTL_BIN_DIR) \
+		$(BP_RTL_LIB_DIR) \
+		$(BP_RTL_INCLUDE_DIR) \
+		$(BP_RTL_TOUCH_DIR)
+	@$(GIT) fetch --all
+	@$(GIT) submodule sync
+	@$(GIT) submodule update --init
 
-TOOL_TARGET_DIRS := $(BP_TOOLS_BIN_DIR) $(BP_TOOLS_LIB_DIR) $(BP_TOOLS_INCLUDE_DIR) $(BP_TOOLS_TOUCH_DIR)
-$(TOOL_TARGET_DIRS):
-	mkdir -p $@
+apply_patches: ## applies patches to submodules
+apply_patches: build.patch
+$(eval $(call bsg_fn_build_if_new,patch,$(CURDIR),$(BP_RTL_TOUCH_DIR)))
+%/.patch_build: checkout
+	@$(GIT) submodule sync --recursive
+	@$(GIT) submodule update --init --recursive --recommend-shallow
+	@$(ECHO) "Patching successful, ignore errors"
 
-tools_lite: libs | $(TOOL_TARGET_DIRS)
-	$(MAKE) verilator
-	$(MAKE) dromajo
+libs_lite: ## minimal RTL libraries
+libs_lite: apply_patches
+	@$(MAKE) build.dramsim3
 
-## This target makes the tools needed for the BlackParrot RTL
-tools: tools_lite
-	$(MAKE) bsg_sv2v
-	$(MAKE) surelog
-	$(MAKE) axe
+libs: ## standard RTL libraries
+libs: libs_lite
+	# Placeholder
 
-tools_bsg: tools bsg_cadenv
-
-bsg_cadenv: $(BP_EXTERNAL_DIR)/bsg_cadenv
-$(BP_EXTERNAL_DIR)/bsg_cadenv:
-	-git clone git@github.com:bespoke-silicon-group/bsg_cadenv.git $(BP_EXTERNAL_DIR)/bsg_cadenv
-
-tidy:
-	echo "BlackParrot RTL is tidy enough"
-
-## This target just wipes the whole repo clean.
-#  Use with caution.
-bleach_all:
-	cd $(TOP); git clean -fdx; git submodule deinit -f .
+libs_bsg: ## addition RTL libraries for BSG users 
+libs_bsg: libs
+	# Placeholder
 

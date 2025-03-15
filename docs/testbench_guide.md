@@ -1,36 +1,17 @@
 # BlackParrot Testbench Guide
-## Prerequisites
-### Centos
-
-    yum install autoconf automake libmpc-devel mpfr-devel gmp-devel gawk  bison flex texinfo
-patchutils gcc gcc-c++ zlib-devel expat-devel dtc gtkwave vim-common virtualenv
-
-CentOS 7 requires a more modern gcc to build Linux. If you receive an error such as "These critical
-programs are missing or too old: make" try
-
-    scl enable devtoolset-8 bash
-
-### Ubuntu
-
-    sudo apt-get install autoconf automake autotools-dev curl libmpc-dev libmpfr-dev libgmp-dev gawk
-build-essential bison flex texinfo gperf libtool patchutils bc zlib1g-dev libexpat-dev wget byacc
-device-tree-compiler python gtkwave vim-common virtualenv python-yaml
-
-BlackParrot has been tested extensively on CentOS 7. We have many users who have used Ubuntu for
-development. If not on a relatively recent version of these OSes, we suggest using a
-Docker image.
 
 ## Overview
 This document is intended to provide software and firmware developers with platform level specifications necessary to develop for BlackParrot. It is a work in progress. Following the full Getting Started guide in the main BlackParrot is the best way to prepare for BlackParrot software development.
 
 ## Architectural Details
 Currently implemented in BlackParrot is:
-* RV64IMAFD_Zfencei (Integer, Multiply/Divide, Single/Double Precision Float, Atomics and Fence.i) User-mode ISA v2.00
+* RV64IMAFDC_Zcsr_Zfencei_Zcbo (Integer, Multiply/Divide, Single/Double Precision Float, Compressed Instructions, Atomics, CSRs, Fence.i) User-mode ISA v2.00
 * MSU (Machine, Supervisor and User) privilege levels conforming to Privileged Architecture v1.11
 * SV39 virtual memory with variable physical address width 
 
 ## Building a Test
-BlackParrot test suites live in `bp_common/test/src` and are compiled with `make -C bp_common/test <test suite>.`. When a suite is compiled, it creates a set of files in `bp_common/test/mem/<suite>`. There are also a number of potential generate targets that are useful for simulation, but are generally handled automatically by the build system. The targets include:
+BlackParrot test suites live in `black-parrot-sdk` and are compiled with `make -C black-parrot-sdk
+<test suite>.`. If a suite has already been compiled, manual recompilation can be done with make -C black-parrot-sdk <test suite>_manual. When a suite is compiled, it creates a set of files in `black-parrot-sdk/prog/<suite>`. There are also a number of potential generate targets that are useful for simulation, but are generally handled automatically by the build system. The targets include:
 * .riscv (the elf file)
 * .dump (a disassembly of the test)
 * .mem (a Verilog hex format file, used to load memories in a simulation)

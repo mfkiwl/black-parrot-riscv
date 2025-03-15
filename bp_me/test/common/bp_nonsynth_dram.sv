@@ -11,15 +11,16 @@
 module bp_nonsynth_dram
  import bp_common_pkg::*;
  import bp_me_pkg::*;
+ import bsg_axi_pkg::*;
  #(parameter bp_params_e bp_params_p = e_bp_default_cfg
    `declare_bp_proc_params(bp_params_p)
-   `declare_bp_bedrock_mem_if_widths(paddr_width_p, did_width_p, lce_id_width_p, lce_assoc_p, cce)
+   `declare_bp_bedrock_if_widths(paddr_width_p, lce_id_width_p, cce_id_width_p, did_width_p, lce_assoc_p)
 
-   , parameter num_dma_p = 1
+   , parameter num_dma_p = 0
    , parameter preload_mem_p = 0
-   , parameter mem_els_p = 0
+   , parameter mem_bytes_p = 0
    , parameter dram_type_p = ""
-   , localparam dma_pkt_width_lp = `bsg_cache_dma_pkt_width(daddr_width_p)
+   , localparam dma_pkt_width_lp = `bsg_cache_dma_pkt_width(daddr_width_p, l2_block_size_in_words_p)
    )
   (input                                                    clk_i
    , input                                                  reset_i
@@ -40,64 +41,18 @@ module bp_nonsynth_dram
    , input                                                  dram_reset_i
    );
 
-  `declare_bsg_cache_dma_pkt_s(daddr_width_p);
-  bsg_cache_dma_pkt_s [num_dma_p-1:0] dma_pkt_li, dma_pkt;
-  assign dma_pkt_li = dma_pkt_i;
-  localparam l2_block_offset_width_lp = `BSG_SAFE_CLOG2(l2_block_width_p/8);
-  localparam lg_l2_sets_lp            = `BSG_SAFE_CLOG2(l2_sets_p);
-  localparam lg_num_cce_lp            = `BSG_SAFE_CLOG2(num_cce_p);
-  localparam int hash_offset_widths_lp[2:0] = '{(lg_l2_sets_lp-lg_num_cce_lp), lg_num_cce_lp, l2_block_offset_width_lp};
-  for (genvar i = 0; i < num_dma_p; i++) begin : address_hash
-    logic [daddr_width_p-1:0] addr_lo;
-    bp_me_dram_hash_decode
-      #(.bp_params_p(bp_params_p)
-        ,.offset_widths_p(hash_offset_widths_lp)
-        ,.addr_width_p(daddr_width_p)
-        )
-      dma_addr_hash
-      (.addr_i(dma_pkt_li[i].addr)
-       ,.addr_o(addr_lo)
-       );
+  import "DPI-C" context function
+    void bsg_mem_dma_set(chandle handle, longint unsigned addr, byte val);
 
-    always_comb begin
-      dma_pkt[i] = dma_pkt_li[i];
-      dma_pkt[i].addr = addr_lo;
-    end
-  end
-
-  if (dram_type_p == "dmc")
-    begin : ddr
-      bp_ddr
-       #(.bp_params_p(bp_params_p), .num_dma_p(num_dma_p))
-       ddr
-        (.clk_i(clk_i)
-         ,.reset_i(reset_i)
-
-         ,.dma_pkt_i(dma_pkt)
-         ,.dma_pkt_v_i(dma_pkt_v_i)
-         ,.dma_pkt_yumi_o(dma_pkt_yumi_o)
-
-         ,.dma_data_o(dma_data_o)
-         ,.dma_data_v_o(dma_data_v_o)
-         ,.dma_data_ready_i(dma_data_ready_and_i)
-
-         ,.dma_data_i(dma_data_i)
-         ,.dma_data_v_i(dma_data_v_i)
-         ,.dma_data_yumi_o(dma_data_yumi_o)
-         );
-
-      if (preload_mem_p)
-        begin : preload
-          $error("Preloading is not supported for DDR");
-        end
-    end
-  else if (dram_type_p == "dramsim3")
+  if (dram_type_p == "dramsim3")
     begin : dramsim3
       `dram_pkg::dram_ch_addr_s dram_read_done_ch_addr_lo;
 
        logic [`dram_pkg::channel_addr_width_p-1:0] dram_ch_addr_li;
        logic dram_write_not_read_li, dram_v_li, dram_yumi_lo;
        logic [`dram_pkg::data_width_p-1:0] dram_data_li;
+       logic [(`dram_pkg::data_width_p>>3)-1:0] dram_mask_li;
+
        logic dram_data_v_li, dram_data_yumi_lo;
        logic [`dram_pkg::data_width_p-1:0] dram_data_lo;
        logic dram_data_v_lo;
@@ -108,7 +63,8 @@ module bp_nonsynth_dram
          end
 
        // TODO: May need to use actual hash function
-       localparam cache_bank_addr_width_lp = `dram_pkg::channel_addr_width_p - `BSG_SAFE_CLOG2(num_dma_p);
+       localparam dram_channel_addr_width_lp = `dram_pkg::channel_addr_width_p;
+       localparam cache_bank_addr_width_lp = dram_channel_addr_width_lp - `BSG_SAFE_CLOG2(num_dma_p);
        bsg_cache_to_test_dram
         #(.num_cache_p(num_dma_p)
           ,.addr_width_p(daddr_width_p)
@@ -124,13 +80,13 @@ module bp_nonsynth_dram
         (.core_clk_i(clk_i)
          ,.core_reset_i(reset_i)
 
-         ,.dma_pkt_i(dma_pkt)
+         ,.dma_pkt_i(dma_pkt_i)
          ,.dma_pkt_v_i(dma_pkt_v_i)
          ,.dma_pkt_yumi_o(dma_pkt_yumi_o)
 
          ,.dma_data_o(dma_data_o)
          ,.dma_data_v_o(dma_data_v_o)
-         ,.dma_data_ready_i(dma_data_ready_and_i)
+         ,.dma_data_ready_and_i(dma_data_ready_and_i)
 
          ,.dma_data_i(dma_data_i)
          ,.dma_data_v_i(dma_data_v_i)
@@ -145,6 +101,7 @@ module bp_nonsynth_dram
          ,.dram_req_yumi_i(dram_yumi_lo)
          ,.dram_data_v_o(dram_data_v_li)
          ,.dram_data_o(dram_data_li)
+         ,.dram_mask_o(dram_mask_li)
          ,.dram_data_yumi_i(dram_data_yumi_lo)
 
          ,.dram_data_v_i(dram_data_v_lo)
@@ -164,6 +121,7 @@ module bp_nonsynth_dram
           ,.address_mapping_p(`dram_pkg::address_mapping_p)
           ,.size_in_bits_p(`dram_pkg::size_in_bits_p)
           ,.config_p(`dram_pkg::config_p)
+          ,.masked_p(l2_features_p[e_cfg_word_tracking])
           ,.init_mem_p(1)
           ,.base_id_p(0)
           )
@@ -174,7 +132,7 @@ module bp_nonsynth_dram
           ,.v_i(dram_v_li)
           ,.write_not_read_i(dram_write_not_read_li)
           ,.ch_addr_i(dram_ch_addr_li)
-          ,.mask_i('1)
+          ,.mask_i(dram_mask_li)
           ,.yumi_o(dram_yumi_lo)
 
           ,.data_v_i(dram_data_v_li)
@@ -187,48 +145,67 @@ module bp_nonsynth_dram
 
           ,.write_done_o()
           ,.write_done_ch_addr_o()
+          ,.print_stat_clk_i('0)
+          ,.print_stat_reset_i('0)
           ,.print_stat_v_i('0)
           ,.print_stat_tag_i('0)
           );
 
-
-      // Preloading is not supported in Verilator due to heirarchical reference and clk
-      //   delay statement.
-      `ifndef VERILATOR
       // This whole segment is unoptimized because it's storing this memory even though it's
       //   only used for initialization. We could read byte-by-byte to avoid this
-      logic [7:0] preload_mem [*];
+      logic [7:0] preload_mem [integer];
+      logic [dram_channel_addr_width_lp-1:0] ch_addr_li;
+      logic [7:0] ch_data_li;
+      localparam lg_num_l2_slices_lp = `BSG_SAFE_CLOG2(l2_slices_p);
+      localparam lg_num_l2_banks_lp = `BSG_SAFE_CLOG2(l2_banks_p);
+      localparam lg_num_dma_lp = `BSG_SAFE_CLOG2(num_dma_p);
+      logic [paddr_width_p-1:0] preload_addr_li;
+      logic [`BSG_SAFE_CLOG2(l2_slices_p)-1:0] preload_slice_lo;
+      logic [`BSG_SAFE_CLOG2(l2_banks_p)-1:0] preload_bank_lo;
+      logic [`BSG_SAFE_CLOG2(l2_banks_p*l2_slices_p)-1:0] preload_dma_lo;
+      assign ch_addr_li = {preload_dma_lo
+                          ,{(dram_channel_addr_width_lp-cache_bank_addr_width_lp-lg_num_dma_lp){1'b0}}
+                          ,preload_addr_li[cache_bank_addr_width_lp-1:0]
+                          };
       initial
-        begin
-          automatic integer h = $fopen("prog.mem", "r");
-          if (h)
-            begin
-              $readmemh("prog.mem", preload_mem);
-              @(posedge clk_i)
-              for (integer i = 0; i < preload_mem.num(); i++)
-                if (preload_mem_p)
-                  dram.channels[0].channel.bsg_mem_dma_set(dram.channels[0].channel.memory, i, preload_mem[i]);
-              preload_mem.delete();
-              $fclose(h);
-            end
-        end
-      `else
-        if (preload_mem_p)
-          begin : preload
-            $error("Preloading is not supported in Verilator");
+        if (preload_mem_p) begin
+          $readmemh("prog.mem", preload_mem);
+          foreach (preload_mem[i]) begin
+            preload_addr_li = dram_base_addr_gp+i;
+            ch_data_li = preload_mem[i];
+            #1;
+            bsg_mem_dma_set(
+                dram.channels[0].channel.memory, ch_addr_li, ch_data_li
+            );
           end
-      `endif
+        end
+
+      bp_me_dram_hash_encode
+       #(.bp_params_p(bp_params_p))
+       dma_hash
+        (.paddr_i(preload_addr_li)
+         ,.data_i()
+         ,.daddr_o()
+         ,.slice_o(preload_slice_lo)
+         ,.bank_o(preload_bank_lo)
+         ,.dram_o()
+         ,.data_o()
+         );
+      assign preload_dma_lo = preload_slice_lo*l2_slices_p + preload_bank_lo;
     end
   else if (dram_type_p == "axi")
     begin : axi
       localparam axi_id_width_p = 6;
       localparam axi_addr_width_p = 64;
-      localparam axi_data_width_p = 512;
+      localparam axi_data_width_p = l2_fill_width_p;
       localparam axi_strb_width_p = axi_data_width_p >> 3;
-      localparam axi_burst_len_p = 1;
+      localparam axi_burst_len_p = l2_block_width_p / l2_fill_width_p;
+
+      localparam mem_els_lp = mem_bytes_p/(axi_data_width_p/8);
 
       logic [axi_id_width_p-1:0] axi_awid;
       logic [caddr_width_p-1:0] axi_awaddr_addr;
+      logic axi_awaddr_addr_unused;
       logic [`BSG_SAFE_CLOG2(num_dma_p)-1:0] axi_awaddr_cache_id;
       logic [7:0] axi_awlen;
       logic [2:0] axi_awsize;
@@ -247,6 +224,7 @@ module bp_nonsynth_dram
 
       logic [axi_id_width_p-1:0] axi_arid;
       logic [caddr_width_p-1:0] axi_araddr_addr;
+      logic axi_araddr_addr_unused;
       logic [`BSG_SAFE_CLOG2(num_dma_p)-1:0] axi_araddr_cache_id;
       logic [7:0] axi_arlen;
       logic [2:0] axi_arsize;
@@ -263,30 +241,33 @@ module bp_nonsynth_dram
       bsg_cache_to_axi
        #(.addr_width_p(daddr_width_p)
          ,.data_width_p(l2_fill_width_p)
+         ,.mask_width_p(l2_block_size_in_words_p)
          ,.block_size_in_words_p(l2_block_size_in_fill_p)
          ,.num_cache_p(num_dma_p)
          ,.axi_id_width_p(axi_id_width_p)
          ,.axi_data_width_p(axi_data_width_p)
          ,.axi_burst_len_p(axi_burst_len_p)
+         ,.axi_burst_type_p(e_axi_burst_wrap)
+         ,.ordering_en_p(1)
          )
       cache2axi
         (.clk_i(clk_i)
          ,.reset_i(reset_i)
 
-         ,.dma_pkt_i(dma_pkt)
+         ,.dma_pkt_i(dma_pkt_i)
          ,.dma_pkt_v_i(dma_pkt_v_i)
          ,.dma_pkt_yumi_o(dma_pkt_yumi_o)
 
          ,.dma_data_o(dma_data_o)
          ,.dma_data_v_o(dma_data_v_o)
-         ,.dma_data_ready_i(dma_data_ready_and_i)
+         ,.dma_data_ready_and_i(dma_data_ready_and_i)
 
          ,.dma_data_i(dma_data_i)
          ,.dma_data_v_i(dma_data_v_i)
          ,.dma_data_yumi_o(dma_data_yumi_o)
 
          ,.axi_awid_o(axi_awid)
-         ,.axi_awaddr_addr_o(axi_awaddr_addr)
+         ,.axi_awaddr_addr_o({axi_awaddr_addr_unused, axi_awaddr_addr})
          ,.axi_awaddr_cache_id_o(axi_awaddr_cache_id)
          ,.axi_awlen_o(axi_awlen)
          ,.axi_awsize_o(axi_awsize)
@@ -308,7 +289,7 @@ module bp_nonsynth_dram
          ,.axi_bvalid_i(axi_bvalid)
          ,.axi_bready_o(axi_bready)
          ,.axi_arid_o(axi_arid)
-         ,.axi_araddr_addr_o(axi_araddr_addr)
+         ,.axi_araddr_addr_o({axi_araddr_addr_unused, axi_araddr_addr})
          ,.axi_araddr_cache_id_o(axi_araddr_cache_id)
          ,.axi_arlen_o(axi_arlen)
          ,.axi_arsize_o(axi_arsize)
@@ -334,8 +315,8 @@ module bp_nonsynth_dram
        #(.axi_id_width_p(axi_id_width_p)
          ,.axi_addr_width_p(axi_addr_width_p)
          ,.axi_data_width_p(axi_data_width_p)
-         ,.axi_burst_len_p(axi_burst_len_p)
-         ,.mem_els_p(mem_els_p)
+         ,.axi_len_width_p(8)
+         ,.mem_els_p(mem_els_lp)
          ,.init_data_p('0)
          )
        axi_mem
@@ -346,6 +327,8 @@ module bp_nonsynth_dram
          ,.axi_awaddr_i(axi_awaddr)
          ,.axi_awvalid_i(axi_awvalid)
          ,.axi_awready_o(axi_awready)
+         ,.axi_awburst_i(axi_awburst)
+         ,.axi_awlen_i(axi_awlen)
 
          ,.axi_wdata_i(axi_wdata)
          ,.axi_wstrb_i(axi_wstrb)
@@ -362,6 +345,8 @@ module bp_nonsynth_dram
          ,.axi_araddr_i(axi_araddr)
          ,.axi_arvalid_i(axi_arvalid)
          ,.axi_arready_o(axi_arready)
+         ,.axi_arburst_i(axi_arburst)
+         ,.axi_arlen_i(axi_arlen)
 
          ,.axi_rid_o(axi_rid)
          ,.axi_rdata_o(axi_rdata)

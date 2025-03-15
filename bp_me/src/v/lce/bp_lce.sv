@@ -16,54 +16,47 @@ module bp_lce
  #(parameter bp_params_e bp_params_p = e_bp_default_cfg
    `declare_bp_proc_params(bp_params_p)
 
-    // parameters specific to this LCE
-    , parameter `BSG_INV_PARAM(assoc_p)
-    , parameter `BSG_INV_PARAM(sets_p)
-    , parameter `BSG_INV_PARAM(block_width_p)
-    , parameter fill_width_p = block_width_p
-    , parameter req_invert_clk_p = 0
-    , parameter data_mem_invert_clk_p = 0
-    , parameter tag_mem_invert_clk_p = 0
-    , parameter stat_mem_invert_clk_p = 0
+   // parameters specific to this LCE (these match the cache managed by the LCE)
+   , parameter `BSG_INV_PARAM(assoc_p)
+   , parameter `BSG_INV_PARAM(sets_p)
+   , parameter `BSG_INV_PARAM(block_width_p)
+   , parameter `BSG_INV_PARAM(fill_width_p)
+   , parameter `BSG_INV_PARAM(data_width_p)
+   , parameter `BSG_INV_PARAM(id_width_p)
 
-    , parameter timeout_max_limit_p=4
+   // LCE-cache interface timeout in cycles
+   , parameter timeout_max_limit_p=4
+   // maximum number of outstanding transactions
+   , parameter credits_p = coh_noc_max_credits_p
+   // issue non-exclusive read requests
+   , parameter non_excl_reads_p = 0
+   , parameter `BSG_INV_PARAM(tag_width_p)
 
-    // maximum number of outstanding transactions
-    , parameter credits_p = coh_noc_max_credits_p
-
-    // issue non-exclusive read requests
-    , parameter non_excl_reads_p = 0
-
-    , parameter metadata_latency_p = 0
-
-    , localparam block_size_in_bytes_lp = (block_width_p/8)
-    , localparam lg_sets_lp = `BSG_SAFE_CLOG2(sets_p)
-    , localparam lg_block_size_in_bytes_lp = `BSG_SAFE_CLOG2(block_size_in_bytes_lp)
-
-   `declare_bp_bedrock_lce_if_widths(paddr_width_p, lce_id_width_p, cce_id_width_p, lce_assoc_p, lce)
-   `declare_bp_cache_engine_if_widths(paddr_width_p, ctag_width_p, sets_p, assoc_p, dword_width_gp, block_width_p, fill_width_p, cache)
+   `declare_bp_bedrock_if_widths(paddr_width_p, lce_id_width_p, cce_id_width_p, did_width_p, lce_assoc_p)
+   `declare_bp_cache_engine_generic_if_widths(paddr_width_p, tag_width_p, sets_p, assoc_p, data_width_p, block_width_p, fill_width_p, id_width_p, cache)
   )
   (
     input                                            clk_i
     , input                                          reset_i
 
     // LCE Configuration
+    , input [did_width_p-1:0]                        did_i
     , input [lce_id_width_p-1:0]                     lce_id_i
     , input bp_lce_mode_e                            lce_mode_i
 
     // Cache-LCE Interface
-    // ready_o->valid_i handshake
+    // valid->yumi; metadata is valid once after request valid
     // metadata arrives in the same cycle as req, or any cycle after, but before the next request
     // can arrive, as indicated by the metadata_v_i signal
     , input [cache_req_width_lp-1:0]                 cache_req_i
     , input                                          cache_req_v_i
     , output logic                                   cache_req_yumi_o
-    , output logic                                   cache_req_busy_o
+    , output logic                                   cache_req_lock_o
     , input [cache_req_metadata_width_lp-1:0]        cache_req_metadata_i
     , input                                          cache_req_metadata_v_i
-    , output logic                                   cache_req_critical_tag_o
-    , output logic                                   cache_req_critical_data_o
-    , output logic                                   cache_req_complete_o
+    , output logic                                   cache_req_critical_o
+    , output logic [id_width_p-1:0]                  cache_req_id_o
+    , output logic                                   cache_req_last_o
     , output logic                                   cache_req_credits_full_o
     , output logic                                   cache_req_credits_empty_o
 
@@ -86,151 +79,210 @@ module bp_lce
     , input                                          stat_mem_pkt_yumi_i
     , input [cache_stat_info_width_lp-1:0]           stat_mem_i
 
-    // LCE-CCE interface
-    // Req: ready->valid
+    // LCE-CCE Interface
+    // BedRock Burst protocol: ready&valid
     , output logic [lce_req_header_width_lp-1:0]     lce_req_header_o
-    , output logic [cce_block_width_p-1:0]           lce_req_data_o
+    , output logic [bedrock_fill_width_p-1:0]        lce_req_data_o
     , output logic                                   lce_req_v_o
-    , input                                          lce_req_ready_then_i
+    , input                                          lce_req_ready_and_i
 
-    // Resp: ready->valid
-    , output logic [lce_resp_header_width_lp-1:0]    lce_resp_header_o
-    , output logic [cce_block_width_p-1:0]           lce_resp_data_o
-    , output logic                                   lce_resp_v_o
-    , input                                          lce_resp_ready_then_i
-
-    // CCE-LCE interface
-    // Cmd_i: valid->yumi
     , input [lce_cmd_header_width_lp-1:0]            lce_cmd_header_i
-    , input [cce_block_width_p-1:0]                  lce_cmd_data_i
+    , input [bedrock_fill_width_p-1:0]               lce_cmd_data_i
     , input                                          lce_cmd_v_i
-    , output logic                                   lce_cmd_yumi_o
+    , output logic                                   lce_cmd_ready_and_o
 
-    // LCE-LCE interface
-    // Cmd_o: ready->valid
-    , output logic [lce_cmd_header_width_lp-1:0]     lce_cmd_header_o
-    , output logic [cce_block_width_p-1:0]           lce_cmd_data_o
-    , output logic                                   lce_cmd_v_o
-    , input                                          lce_cmd_ready_then_i
+    , input [lce_fill_header_width_lp-1:0]           lce_fill_header_i
+    , input [bedrock_fill_width_p-1:0]               lce_fill_data_i
+    , input                                          lce_fill_v_i
+    , output logic                                   lce_fill_ready_and_o
+
+    , output logic [lce_fill_header_width_lp-1:0]    lce_fill_header_o
+    , output logic [bedrock_fill_width_p-1:0]        lce_fill_data_o
+    , output logic                                   lce_fill_v_o
+    , input                                          lce_fill_ready_and_i
+
+    , output logic [lce_resp_header_width_lp-1:0]    lce_resp_header_o
+    , output logic [bedrock_fill_width_p-1:0]        lce_resp_data_o
+    , output logic                                   lce_resp_v_o
+    , input                                          lce_resp_ready_and_i
   );
 
-  // parameter checks
+  // LCE/Cache Parameter Constraints
   if ((sets_p <= 1) || !(`BSG_IS_POW2(sets_p)))
-    $fatal(0,"LCE sets must be greater than 1 and power of two");
-  if ((block_width_p % 8 != 0) || !(`BSG_IS_POW2(block_width_p)))
-    $fatal(0,"LCE block width must be a whole number of bytes and power of two");
-  if (block_width_p > 1024)
-    $fatal(0,"LCE block width must be no greater than 128 bytes");
-  if (fill_width_p != block_width_p)
-    $fatal(0,"LCE block width must be equal to fill width. Partial fill is not supported");
+    $error("LCE sets must be greater than 1 and power of two");
   if (!(`BSG_IS_POW2(assoc_p)))
-    $fatal(0,"LCE assoc must be power of two");
+    $error("LCE assoc must be power of two");
+  if (!(`BSG_IS_POW2(block_width_p)))
+    $error("LCE block width must be a power of two");
+  if (block_width_p < 64 || block_width_p > 1024)
+    $error("LCE block width must be between 8 and 128 bytes");
+  // cache request packet data width == dword_width_gp
+  // LCE only supports single data beat for requests
+  if (fill_width_p < dword_width_gp)
+    $error("fill width must be greater or equal than cache request data width");
+
+  `declare_bp_cache_engine_generic_if(paddr_width_p, tag_width_p, sets_p, assoc_p, data_width_p, block_width_p, fill_width_p, id_width_p, cache);
+  `declare_bp_bedrock_if(paddr_width_p, lce_id_width_p, cce_id_width_p, did_width_p, lce_assoc_p);
 
   // LCE Request Module
-  logic req_ready_lo;
-  logic uc_store_req_complete_lo;
+  logic req_busy_lo;
+  logic credit_return_lo;
+  logic cache_req_done_lo;
   logic sync_done_lo;
+  logic cache_init_done_lo;
   bp_lce_req
-    #(.bp_params_p(bp_params_p)
-      ,.assoc_p(assoc_p)
-      ,.sets_p(sets_p)
-      ,.block_width_p(block_width_p)
-      ,.fill_width_p(fill_width_p)
-      ,.credits_p(credits_p)
-      ,.non_excl_reads_p(non_excl_reads_p)
-      ,.metadata_latency_p(metadata_latency_p)
-      )
-    request
-      (.clk_i(clk_i)
-      ,.reset_i(reset_i)
+   #(.bp_params_p(bp_params_p)
+     ,.assoc_p(assoc_p)
+     ,.sets_p(sets_p)
+     ,.block_width_p(block_width_p)
+     ,.fill_width_p(fill_width_p)
+     ,.data_width_p(data_width_p)
+     ,.tag_width_p(tag_width_p)
+     ,.credits_p(credits_p)
+     ,.non_excl_reads_p(non_excl_reads_p)
+     ,.id_width_p(id_width_p)
+     )
+   request
+    (.clk_i(clk_i)
+     ,.reset_i(reset_i)
 
-      ,.lce_id_i(lce_id_i)
-      ,.lce_mode_i(lce_mode_i)
-      ,.sync_done_i(sync_done_lo)
+     ,.did_i(did_i)
+     ,.lce_id_i(lce_id_i)
+     ,.lce_mode_i(lce_mode_i)
+     ,.sync_done_i(sync_done_lo)
+     ,.cache_init_done_i(cache_init_done_lo)
 
-      ,.ready_o(req_ready_lo)
+     ,.busy_o(req_busy_lo)
 
-      ,.cache_req_i(cache_req_i)
-      // Gate the cache_req_v_i signal to prevent yumis when busy
-      ,.cache_req_v_i(~cache_req_busy_o & cache_req_v_i)
-      ,.cache_req_yumi_o(cache_req_yumi_o)
-      ,.cache_req_metadata_i(cache_req_metadata_i)
-      ,.cache_req_metadata_v_i(cache_req_metadata_v_i)
-      ,.cache_req_complete_i(cache_req_complete_o)
-      ,.credits_full_o(cache_req_credits_full_o)
-      ,.credits_empty_o(cache_req_credits_empty_o)
+     ,.cache_req_i(cache_req_i)
+     ,.cache_req_v_i(cache_req_v_i)
+     ,.cache_req_yumi_o(cache_req_yumi_o)
+     ,.cache_req_metadata_i(cache_req_metadata_i)
+     ,.cache_req_metadata_v_i(cache_req_metadata_v_i)
+     ,.cache_req_credits_full_o(cache_req_credits_full_o)
+     ,.cache_req_credits_empty_o(cache_req_credits_empty_o)
+     ,.credit_return_i(credit_return_lo)
+     ,.cache_req_done_i(cache_req_done_lo)
 
-      ,.uc_store_req_complete_i(uc_store_req_complete_lo)
+     ,.lce_req_header_o(lce_req_header_o)
+     ,.lce_req_data_o(lce_req_data_o)
+     ,.lce_req_v_o(lce_req_v_o)
+     ,.lce_req_ready_and_i(lce_req_ready_and_i)
+     );
 
-      ,.lce_req_header_o(lce_req_header_o)
-      ,.lce_req_data_o(lce_req_data_o)
-      ,.lce_req_v_o(lce_req_v_o)
-      ,.lce_req_ready_then_i(lce_req_ready_then_i)
-      );
+  // To prevent unnecessary arbitration on the critical cache request ports, we multiplex
+  //   LCE cmds and LCE fills into a single stream at this point. This could be done for
+  //   perhaps a bit less overhead at the netlist level, but it's more challenging to
+  //   verify protocol/deadlock correctness at that level. At this level, we can simply
+  //   say that it's sufficient to buffer a full output fill message such that it's never
+  //   the case that an input cmd is blocked by an output fill
+  bp_bedrock_lce_cmd_header_s lce_cmd_header_li;
+  logic [fill_width_p-1:0] lce_cmd_data_li;
+  logic lce_cmd_v_li, lce_cmd_ready_and_lo;
+
+  bp_me_xbar_stream
+   #(.bp_params_p(bp_params_p)
+     ,.payload_width_p(lce_cmd_payload_width_lp)
+     ,.stream_mask_p(lce_cmd_stream_mask_gp)
+     ,.num_source_p(2)
+     ,.num_sink_p(1)
+     )
+   lce_cmd_fill_xbar
+    (.clk_i(clk_i)
+     ,.reset_i(reset_i)
+
+     ,.msg_header_i({lce_cmd_header_i, lce_fill_header_i})
+     ,.msg_data_i({lce_cmd_data_i, lce_fill_data_i})
+     ,.msg_v_i({lce_cmd_v_i, lce_fill_v_i})
+     ,.msg_ready_and_o({lce_cmd_ready_and_o, lce_fill_ready_and_o})
+     ,.msg_dst_i('0) // Single destination
+
+     ,.msg_header_o(lce_cmd_header_li)
+     ,.msg_data_o(lce_cmd_data_li)
+     ,.msg_v_o(lce_cmd_v_li)
+     ,.msg_ready_and_i(lce_cmd_ready_and_lo)
+     );
+
+  bp_bedrock_lce_fill_header_s lce_fill_header_lo;
+  logic [fill_width_p-1:0] lce_fill_data_lo;
+  logic lce_fill_v_lo, lce_fill_ready_and_li;
+  bsg_two_fifo
+   #(.width_p(fill_width_p+$bits(bp_bedrock_lce_fill_header_s)))
+   lce_fill_fifo
+    (.clk_i(clk_i)
+     ,.reset_i(reset_i)
+
+     ,.data_i({lce_fill_data_lo, lce_fill_header_lo})
+     ,.v_i(lce_fill_v_lo)
+     ,.ready_param_o(lce_fill_ready_and_li)
+
+     ,.data_o({lce_fill_data_o, lce_fill_header_o})
+     ,.v_o(lce_fill_v_o)
+     ,.yumi_i(lce_fill_ready_and_i & lce_fill_v_o)
+     );
 
   // LCE Command Module
-  logic cmd_ready_lo, cmd_busy_lo;
   bp_lce_cmd
-    #(.bp_params_p(bp_params_p)
-      ,.assoc_p(assoc_p)
-      ,.sets_p(sets_p)
-      ,.block_width_p(block_width_p)
-      ,.fill_width_p(fill_width_p)
-      ,.data_mem_invert_clk_p(data_mem_invert_clk_p)
-      ,.tag_mem_invert_clk_p(tag_mem_invert_clk_p)
-      ,.stat_mem_invert_clk_p(stat_mem_invert_clk_p)
-      )
-    command
-      (.clk_i(clk_i)
-      ,.reset_i(reset_i)
+   #(.bp_params_p(bp_params_p)
+     ,.assoc_p(assoc_p)
+     ,.sets_p(sets_p)
+     ,.block_width_p(block_width_p)
+     ,.fill_width_p(fill_width_p)
+     ,.data_width_p(data_width_p)
+     ,.tag_width_p(tag_width_p)
+     ,.id_width_p(id_width_p)
+     )
+   command
+    (.clk_i(clk_i)
+     ,.reset_i(reset_i)
 
-      ,.lce_id_i(lce_id_i)
-      ,.lce_mode_i(lce_mode_i)
+     ,.lce_id_i(lce_id_i)
+     ,.lce_mode_i(lce_mode_i)
 
-      ,.ready_o(cmd_ready_lo)
-      ,.sync_done_o(sync_done_lo)
-      ,.cache_req_complete_o(cache_req_complete_o)
-      ,.cache_req_critical_tag_o(cache_req_critical_tag_o)
-      ,.cache_req_critical_data_o(cache_req_critical_data_o)
-      ,.uc_store_req_complete_o(uc_store_req_complete_lo)
+     ,.cache_init_done_o(cache_init_done_lo)
+     ,.sync_done_o(sync_done_lo)
+     ,.cache_req_id_o(cache_req_id_o)
+     ,.cache_req_critical_o(cache_req_critical_o)
+     ,.cache_req_last_o(cache_req_last_o)
+     ,.credit_return_o(credit_return_lo)
+     ,.cache_req_done_o(cache_req_done_lo)
 
-      ,.data_mem_pkt_o(data_mem_pkt_o)
-      ,.data_mem_pkt_v_o(data_mem_pkt_v_o)
-      ,.data_mem_pkt_yumi_i(data_mem_pkt_yumi_i)
-      ,.data_mem_i(data_mem_i)
+     ,.data_mem_pkt_o(data_mem_pkt_o)
+     ,.data_mem_pkt_v_o(data_mem_pkt_v_o)
+     ,.data_mem_pkt_yumi_i(data_mem_pkt_yumi_i)
+     ,.data_mem_i(data_mem_i)
 
-      ,.tag_mem_pkt_o(tag_mem_pkt_o)
-      ,.tag_mem_pkt_v_o(tag_mem_pkt_v_o)
-      ,.tag_mem_pkt_yumi_i(tag_mem_pkt_yumi_i)
-      ,.tag_mem_i(tag_mem_i)
+     ,.tag_mem_pkt_o(tag_mem_pkt_o)
+     ,.tag_mem_pkt_v_o(tag_mem_pkt_v_o)
+     ,.tag_mem_pkt_yumi_i(tag_mem_pkt_yumi_i)
+     ,.tag_mem_i(tag_mem_i)
 
-      ,.stat_mem_pkt_o(stat_mem_pkt_o)
-      ,.stat_mem_pkt_v_o(stat_mem_pkt_v_o)
-      ,.stat_mem_pkt_yumi_i(stat_mem_pkt_yumi_i)
-      ,.stat_mem_i(stat_mem_i)
+     ,.stat_mem_pkt_o(stat_mem_pkt_o)
+     ,.stat_mem_pkt_v_o(stat_mem_pkt_v_o)
+     ,.stat_mem_pkt_yumi_i(stat_mem_pkt_yumi_i)
+     ,.stat_mem_i(stat_mem_i)
 
-      ,.lce_cmd_header_i(lce_cmd_header_i)
-      ,.lce_cmd_data_i(lce_cmd_data_i)
-      ,.lce_cmd_v_i(lce_cmd_v_i)
-      ,.lce_cmd_yumi_o(lce_cmd_yumi_o)
+     ,.lce_cmd_header_i(lce_cmd_header_li)
+     ,.lce_cmd_data_i(lce_cmd_data_li)
+     ,.lce_cmd_v_i(lce_cmd_v_li)
+     ,.lce_cmd_ready_and_o(lce_cmd_ready_and_lo)
 
-      ,.lce_resp_header_o(lce_resp_header_o)
-      ,.lce_resp_data_o(lce_resp_data_o)
-      ,.lce_resp_v_o(lce_resp_v_o)
-      ,.lce_resp_ready_then_i(lce_resp_ready_then_i)
+     ,.lce_fill_header_o(lce_fill_header_lo)
+     ,.lce_fill_data_o(lce_fill_data_lo)
+     ,.lce_fill_v_o(lce_fill_v_lo)
+     ,.lce_fill_ready_and_i(lce_fill_ready_and_li)
 
-      ,.lce_cmd_header_o(lce_cmd_header_o)
-      ,.lce_cmd_data_o(lce_cmd_data_o)
-      ,.lce_cmd_v_o(lce_cmd_v_o)
-      ,.lce_cmd_ready_then_i(lce_cmd_ready_then_i)
-      );
-
+     ,.lce_resp_header_o(lce_resp_header_o)
+     ,.lce_resp_data_o(lce_resp_data_o)
+     ,.lce_resp_v_o(lce_resp_v_o)
+     ,.lce_resp_ready_and_i(lce_resp_ready_and_i)
+     );
 
   // LCE timeout logic
   //
   // LCE can read/write to data_mem, tag_mem, and stat_mem during cycles the cache itself is
   // not using them. To prevent the LCE from stalling for too long while waiting for one of
-  // these ports, or when processing an inbound LCE command, there is a timer that deasserts the
+  // these ports, or when processing an inbound LCE command, there is a timer that raises the
   // LCE's busy_o signal to prevent the cache from issuing a new request, thereby
   // freeing up a cycle for the LCE to use these resources.
 
@@ -255,10 +307,11 @@ module bp_lce
   wire timeout = (timeout_cnt_r == timeout_max_limit_p);
 
   // LCE is ready to accept new cache requests if:
-  // - LCE Request module is in ready state and free credits exist
+  // - LCE Request module is ready to accept a request (does not account for a free credit)
   // - timout signal is low, indicating LCE isn't blocked on using data/tag/stat mem
-  // - LCE Command module is ready to process commands (raised after initialization complete)
-  assign cache_req_busy_o = cache_req_credits_full_o | timeout | ~cmd_ready_lo | ~req_ready_lo;
+  // This signal acts as a hint to the cache that the LCE is not ready for a request.
+  // The cache_req_yumi_o signal actually controls whether the LCE accepts a request.
+  assign cache_req_lock_o = timeout | req_busy_lo | ~cache_init_done_lo;
 
 endmodule
 

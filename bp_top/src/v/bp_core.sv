@@ -1,306 +1,390 @@
+
 /**
- *  bp_core.v
  *
- *  icache is connected to 0.
- *  dcache is connected to 1.
+ * bp_core.sv
+ *
  */
 
 `include "bp_common_defines.svh"
+`include "bp_be_defines.svh"
+`include "bp_me_defines.svh"
 `include "bp_top_defines.svh"
+`include "bsg_cache.svh"
+`include "bsg_noc_links.svh"
 
 module bp_core
  import bp_common_pkg::*;
- import bp_fe_pkg::*;
  import bp_be_pkg::*;
+ import bp_me_pkg::*;
+ import bp_top_pkg::*;
+ import bsg_cache_pkg::*;
+ import bsg_noc_pkg::*;
+ import bsg_wormhole_router_pkg::*;
  #(parameter bp_params_e bp_params_p = e_bp_default_cfg
    `declare_bp_proc_params(bp_params_p)
-   `declare_bp_core_if_widths(vaddr_width_p, paddr_width_p, asid_width_p, branch_metadata_fwd_width_p)
-   `declare_bp_bedrock_lce_if_widths(paddr_width_p, lce_id_width_p, cce_id_width_p, lce_assoc_p, lce)
-   `declare_bp_cache_engine_if_widths(paddr_width_p, ctag_width_p, icache_sets_p, icache_assoc_p, dword_width_gp, icache_block_width_p, icache_fill_width_p, icache)
-   `declare_bp_cache_engine_if_widths(paddr_width_p, ctag_width_p, dcache_sets_p, dcache_assoc_p, dword_width_gp, dcache_block_width_p, dcache_fill_width_p, dcache)
+   `declare_bp_bedrock_if_widths(paddr_width_p, lce_id_width_p, cce_id_width_p, did_width_p, lce_assoc_p)
 
-   , localparam cfg_bus_width_lp = `bp_cfg_bus_width(hio_width_p, core_id_width_p, cce_id_width_p, lce_id_width_p)
-  )
- (input                                              clk_i
-  , input                                            reset_i
+   , localparam cfg_bus_width_lp = `bp_cfg_bus_width(vaddr_width_p, hio_width_p, core_id_width_p, cce_id_width_p, lce_id_width_p, did_width_p)
+   , localparam dma_pkt_width_lp = `bsg_cache_dma_pkt_width(daddr_width_p, l2_block_size_in_words_p)
+   )
+  (input                                                 clk_i
+   , input                                               rt_clk_i
+   , input                                               reset_i
 
-  , input [cfg_bus_width_lp-1:0]                     cfg_bus_i
+   , output logic [cfg_bus_width_lp-1:0]                 cfg_bus_o
+   , output logic                                        cce_ucode_v_o
+   , output logic                                        cce_ucode_w_o
+   , output logic [cce_pc_width_p-1:0]                   cce_ucode_addr_o
+   , output logic [cce_instr_width_gp-1:0]               cce_ucode_data_o
+   , input [cce_instr_width_gp-1:0]                      cce_ucode_data_i
 
-  // LCE-CCE interface
-  , output logic [1:0][lce_req_header_width_lp-1:0]  lce_req_header_o
-  , output logic [1:0][cce_block_width_p-1:0]        lce_req_data_o
-  , output logic [1:0]                               lce_req_v_o
-  , input [1:0]                                      lce_req_ready_then_i
+   // Memory side connection
+   , input [mem_noc_did_width_p-1:0]                     my_did_i
+   , input [mem_noc_did_width_p-1:0]                     host_did_i
+   , input [coh_noc_cord_width_p-1:0]                    my_cord_i
 
-  , output logic [1:0][lce_resp_header_width_lp-1:0] lce_resp_header_o
-  , output logic [1:0][cce_block_width_p-1:0]        lce_resp_data_o
-  , output logic [1:0]                               lce_resp_v_o
-  , input [1:0]                                      lce_resp_ready_then_i
+   , output logic [1:0][lce_req_header_width_lp-1:0]     lce_req_header_o
+   , output logic [1:0][icache_fill_width_p-1:0]         lce_req_data_o
+   , output logic [1:0]                                  lce_req_v_o
+   , input [1:0]                                         lce_req_ready_and_i
 
-  // CCE-LCE interface
-  , input [1:0][lce_cmd_header_width_lp-1:0]         lce_cmd_header_i
-  , input [1:0][cce_block_width_p-1:0]               lce_cmd_data_i
-  , input [1:0]                                      lce_cmd_v_i
-  , output logic [1:0]                               lce_cmd_yumi_o
+   , input [1:0][lce_cmd_header_width_lp-1:0]            lce_cmd_header_i
+   , input [1:0][icache_fill_width_p-1:0]                lce_cmd_data_i
+   , input [1:0]                                         lce_cmd_v_i
+   , output logic [1:0]                                  lce_cmd_ready_and_o
 
-  , output logic [1:0][lce_cmd_header_width_lp-1:0]  lce_cmd_header_o
-  , output logic [1:0][cce_block_width_p-1:0]        lce_cmd_data_o
-  , output logic [1:0]                               lce_cmd_v_o
-  , input [1:0]                                      lce_cmd_ready_then_i
+   , input [1:0][lce_fill_header_width_lp-1:0]           lce_fill_header_i
+   , input [1:0][icache_fill_width_p-1:0]                lce_fill_data_i
+   , input [1:0]                                         lce_fill_v_i
+   , output logic [1:0]                                  lce_fill_ready_and_o
 
-  , input                                            timer_irq_i
-  , input                                            software_irq_i
-  , input                                            external_irq_i
-  );
+   , output logic [1:0][lce_fill_header_width_lp-1:0]    lce_fill_header_o
+   , output logic [1:0][icache_fill_width_p-1:0]         lce_fill_data_o
+   , output logic [1:0]                                  lce_fill_v_o
+   , input [1:0]                                         lce_fill_ready_and_i
 
-  `declare_bp_cfg_bus_s(hio_width_p, core_id_width_p, cce_id_width_p, lce_id_width_p);
-  `declare_bp_cache_engine_if(paddr_width_p, ctag_width_p, icache_sets_p, icache_assoc_p, dword_width_gp, icache_block_width_p, icache_fill_width_p, icache);
-  `declare_bp_cache_engine_if(paddr_width_p, ctag_width_p, dcache_sets_p, dcache_assoc_p, dword_width_gp, dcache_block_width_p, dcache_fill_width_p, dcache);
+   , output logic [1:0][lce_resp_header_width_lp-1:0]    lce_resp_header_o
+   , output logic [1:0][icache_fill_width_p-1:0]         lce_resp_data_o
+   , output logic [1:0]                                  lce_resp_v_o
+   , input [1:0]                                         lce_resp_ready_and_i
 
-  `bp_cast_i(bp_cfg_bus_s, cfg_bus);
+   , input [mem_fwd_header_width_lp-1:0]                 mem_fwd_header_i
+   , input [bedrock_fill_width_p-1:0]                    mem_fwd_data_i
+   , input                                               mem_fwd_v_i
+   , output logic                                        mem_fwd_ready_and_o
 
-  bp_icache_req_s icache_req_lo;
-  logic icache_req_v_lo, icache_req_yumi_li, icache_req_busy_li;
-  bp_icache_req_metadata_s icache_req_metadata_lo;
-  logic icache_req_metadata_v_lo;
-  logic icache_req_critical_tag_li, icache_req_critical_data_li, icache_req_complete_li;
-  logic icache_req_credits_full_li, icache_req_credits_empty_li;
+   , output logic [mem_rev_header_width_lp-1:0]          mem_rev_header_o
+   , output logic [bedrock_fill_width_p-1:0]             mem_rev_data_o
+   , output logic                                        mem_rev_v_o
+   , input                                               mem_rev_ready_and_i
 
-  bp_dcache_req_s dcache_req_lo;
-  logic dcache_req_v_lo, dcache_req_yumi_li, dcache_req_busy_li;
-  bp_dcache_req_metadata_s dcache_req_metadata_lo;
-  logic dcache_req_metadata_v_lo;
-  logic dcache_req_critical_tag_li, dcache_req_critical_data_li, dcache_req_complete_li;
-  logic dcache_req_credits_full_li, dcache_req_credits_empty_li;
+   , output logic [l2_slices_p-1:0][l2_banks_p-1:0][dma_pkt_width_lp-1:0] dma_pkt_o
+   , output logic [l2_slices_p-1:0][l2_banks_p-1:0]                       dma_pkt_v_o
+   , input [l2_slices_p-1:0][l2_banks_p-1:0]                              dma_pkt_ready_and_i
 
-  bp_icache_tag_mem_pkt_s icache_tag_mem_pkt_li;
-  logic icache_tag_mem_pkt_v_li;
-  logic icache_tag_mem_pkt_yumi_lo;
-  bp_icache_tag_info_s icache_tag_mem_lo;
+   , input [l2_slices_p-1:0][l2_banks_p-1:0][l2_fill_width_p-1:0]         dma_data_i
+   , input [l2_slices_p-1:0][l2_banks_p-1:0]                              dma_data_v_i
+   , output logic [l2_slices_p-1:0][l2_banks_p-1:0]                       dma_data_ready_and_o
 
-  bp_icache_data_mem_pkt_s icache_data_mem_pkt_li;
-  logic icache_data_mem_pkt_v_li;
-  logic icache_data_mem_pkt_yumi_lo;
-  logic [icache_block_width_p-1:0] icache_data_mem_lo;
+   , output logic [l2_slices_p-1:0][l2_banks_p-1:0][l2_fill_width_p-1:0]  dma_data_o
+   , output logic [l2_slices_p-1:0][l2_banks_p-1:0]                       dma_data_v_o
+   , input [l2_slices_p-1:0][l2_banks_p-1:0]                              dma_data_ready_and_i
+   );
 
-  bp_icache_stat_mem_pkt_s icache_stat_mem_pkt_li;
-  logic icache_stat_mem_pkt_v_li;
-  logic icache_stat_mem_pkt_yumi_lo;
-  bp_icache_stat_info_s icache_stat_mem_lo;
+  `declare_bp_cfg_bus_s(vaddr_width_p, hio_width_p, core_id_width_p, cce_id_width_p, lce_id_width_p, did_width_p);
+  `declare_bp_bedrock_if(paddr_width_p, lce_id_width_p, cce_id_width_p, did_width_p, lce_assoc_p);
+  `declare_bp_memory_map(paddr_width_p, daddr_width_p);
 
-  bp_dcache_tag_mem_pkt_s dcache_tag_mem_pkt_li;
-  logic dcache_tag_mem_pkt_v_li;
-  logic dcache_tag_mem_pkt_yumi_lo;
-  bp_dcache_tag_info_s dcache_tag_mem_lo;
+  // Only CCE acts as a proc for multicore
+  localparam cce_proc_id_lp     =                      0;
+  localparam num_proc_lp        = cce_proc_id_lp     + 1;
+  localparam lg_num_proc_lp     = `BSG_SAFE_CLOG2(num_proc_lp);
 
-  bp_dcache_data_mem_pkt_s dcache_data_mem_pkt_li;
-  logic dcache_data_mem_pkt_v_li;
-  logic dcache_data_mem_pkt_yumi_lo;
-  logic [dcache_block_width_p-1:0] dcache_data_mem_lo;
+  localparam cfg_dev_id_lp      =                      0;
+  localparam clint_dev_id_lp    = cfg_dev_id_lp      + 1;
+  localparam l2s_dev_base_id_lp = clint_dev_id_lp    + 1;
+  localparam loopback_dev_id_lp = l2s_dev_base_id_lp + l2_slices_p;
+  localparam num_dev_lp         = loopback_dev_id_lp + 1;
+  localparam lg_num_dev_lp      = `BSG_SAFE_CLOG2(num_dev_lp);
 
-  bp_dcache_stat_mem_pkt_s dcache_stat_mem_pkt_li;
-  logic dcache_stat_mem_pkt_v_li;
-  logic dcache_stat_mem_pkt_yumi_lo;
-  bp_dcache_stat_info_s dcache_stat_mem_lo;
+  // {CCE}
+  bp_bedrock_mem_fwd_header_s [num_proc_lp-1:0] proc_fwd_header_lo;
+  logic [num_proc_lp-1:0][bedrock_fill_width_p-1:0] proc_fwd_data_lo;
+  logic [num_proc_lp-1:0] proc_fwd_v_lo, proc_fwd_ready_and_li;
+  bp_bedrock_mem_rev_header_s [num_proc_lp-1:0] proc_rev_header_li;
+  logic [num_proc_lp-1:0][bedrock_fill_width_p-1:0] proc_rev_data_li;
+  logic [num_proc_lp-1:0] proc_rev_v_li, proc_rev_ready_and_lo;
 
-  bp_core_minimal
+  // Device-side CCE-Mem network connections
+  // {LOOPBACK, L2, CLINT, CFG}
+  bp_bedrock_mem_fwd_header_s [num_dev_lp-1:0] dev_fwd_header_li;
+  logic [num_dev_lp-1:0][bedrock_fill_width_p-1:0] dev_fwd_data_li;
+  logic [num_dev_lp-1:0] dev_fwd_v_li, dev_fwd_ready_and_lo;
+  bp_bedrock_mem_rev_header_s [num_dev_lp-1:0] dev_rev_header_lo;
+  logic [num_dev_lp-1:0][bedrock_fill_width_p-1:0] dev_rev_data_lo;
+  logic [num_dev_lp-1:0] dev_rev_v_lo, dev_rev_ready_and_li;
+
+  bp_cfg_bus_s cfg_bus_lo;
+  logic debug_irq_li, timer_irq_li, software_irq_li, m_external_irq_li, s_external_irq_li;
+  bp_core_lite
    #(.bp_params_p(bp_params_p))
-   core_minimal
+   core_lite
     (.clk_i(clk_i)
      ,.reset_i(reset_i)
-     ,.cfg_bus_i(cfg_bus_cast_i)
 
-     ,.icache_req_o(icache_req_lo)
-     ,.icache_req_v_o(icache_req_v_lo)
-     ,.icache_req_yumi_i(icache_req_yumi_li)
-     ,.icache_req_busy_i(icache_req_busy_li)
-     ,.icache_req_metadata_o(icache_req_metadata_lo)
-     ,.icache_req_metadata_v_o(icache_req_metadata_v_lo)
-     ,.icache_req_complete_i(icache_req_complete_li)
-     ,.icache_req_critical_tag_i(icache_req_critical_tag_li)
-     ,.icache_req_critical_data_i(icache_req_critical_data_li)
-     ,.icache_req_credits_full_i(icache_req_credits_full_li)
-     ,.icache_req_credits_empty_i(icache_req_credits_empty_li)
+     ,.cfg_bus_i(cfg_bus_lo)
 
-     ,.icache_tag_mem_pkt_i(icache_tag_mem_pkt_li)
-     ,.icache_tag_mem_pkt_v_i(icache_tag_mem_pkt_v_li)
-     ,.icache_tag_mem_pkt_yumi_o(icache_tag_mem_pkt_yumi_lo)
-     ,.icache_tag_mem_o(icache_tag_mem_lo)
+     ,.lce_req_header_o(lce_req_header_o)
+     ,.lce_req_data_o(lce_req_data_o)
+     ,.lce_req_v_o(lce_req_v_o)
+     ,.lce_req_ready_and_i(lce_req_ready_and_i)
 
-     ,.icache_data_mem_pkt_i(icache_data_mem_pkt_li)
-     ,.icache_data_mem_pkt_v_i(icache_data_mem_pkt_v_li)
-     ,.icache_data_mem_pkt_yumi_o(icache_data_mem_pkt_yumi_lo)
-     ,.icache_data_mem_o(icache_data_mem_lo)
+     ,.lce_cmd_header_i(lce_cmd_header_i)
+     ,.lce_cmd_data_i(lce_cmd_data_i)
+     ,.lce_cmd_v_i(lce_cmd_v_i)
+     ,.lce_cmd_ready_and_o(lce_cmd_ready_and_o)
 
-     ,.icache_stat_mem_pkt_v_i(icache_stat_mem_pkt_v_li)
-     ,.icache_stat_mem_pkt_i(icache_stat_mem_pkt_li)
-     ,.icache_stat_mem_pkt_yumi_o(icache_stat_mem_pkt_yumi_lo)
-     ,.icache_stat_mem_o(icache_stat_mem_lo)
+     ,.lce_resp_header_o(lce_resp_header_o)
+     ,.lce_resp_data_o(lce_resp_data_o)
+     ,.lce_resp_v_o(lce_resp_v_o)
+     ,.lce_resp_ready_and_i(lce_resp_ready_and_i)
 
-     ,.dcache_req_o(dcache_req_lo)
-     ,.dcache_req_v_o(dcache_req_v_lo)
-     ,.dcache_req_yumi_i(dcache_req_yumi_li)
-     ,.dcache_req_busy_i(dcache_req_busy_li)
-     ,.dcache_req_metadata_o(dcache_req_metadata_lo)
-     ,.dcache_req_metadata_v_o(dcache_req_metadata_v_lo)
-     ,.dcache_req_complete_i(dcache_req_complete_li)
-     ,.dcache_req_critical_tag_i(dcache_req_critical_tag_li)
-     ,.dcache_req_critical_data_i(dcache_req_critical_data_li)
-     ,.dcache_req_credits_full_i(dcache_req_credits_full_li)
-     ,.dcache_req_credits_empty_i(dcache_req_credits_empty_li)
+     ,.lce_fill_header_i(lce_fill_header_i)
+     ,.lce_fill_data_i(lce_fill_data_i)
+     ,.lce_fill_v_i(lce_fill_v_i)
+     ,.lce_fill_ready_and_o(lce_fill_ready_and_o)
 
-     ,.dcache_tag_mem_pkt_i(dcache_tag_mem_pkt_li)
-     ,.dcache_tag_mem_pkt_v_i(dcache_tag_mem_pkt_v_li)
-     ,.dcache_tag_mem_pkt_yumi_o(dcache_tag_mem_pkt_yumi_lo)
-     ,.dcache_tag_mem_o(dcache_tag_mem_lo)
+     ,.lce_fill_header_o(lce_fill_header_o)
+     ,.lce_fill_data_o(lce_fill_data_o)
+     ,.lce_fill_v_o(lce_fill_v_o)
+     ,.lce_fill_ready_and_i(lce_fill_ready_and_i)
 
-     ,.dcache_data_mem_pkt_i(dcache_data_mem_pkt_li)
-     ,.dcache_data_mem_pkt_v_i(dcache_data_mem_pkt_v_li)
-     ,.dcache_data_mem_pkt_yumi_o(dcache_data_mem_pkt_yumi_lo)
-     ,.dcache_data_mem_o(dcache_data_mem_lo)
-
-     ,.dcache_stat_mem_pkt_v_i(dcache_stat_mem_pkt_v_li)
-     ,.dcache_stat_mem_pkt_i(dcache_stat_mem_pkt_li)
-     ,.dcache_stat_mem_pkt_yumi_o(dcache_stat_mem_pkt_yumi_lo)
-     ,.dcache_stat_mem_o(dcache_stat_mem_lo)
-
-     ,.timer_irq_i(timer_irq_i)
-     ,.software_irq_i(software_irq_i)
-     ,.external_irq_i(external_irq_i)
+     ,.debug_irq_i(debug_irq_li)
+     ,.timer_irq_i(timer_irq_li)
+     ,.software_irq_i(software_irq_li)
+     ,.m_external_irq_i(m_external_irq_li)
+     ,.s_external_irq_i(s_external_irq_li)
      );
 
-  bp_lce
+  // CCE drives all local memory requests
+  assign proc_fwd_header_lo[cce_proc_id_lp] = mem_fwd_header_i;
+  assign proc_fwd_data_lo[cce_proc_id_lp] = mem_fwd_data_i;
+  assign proc_fwd_v_lo[cce_proc_id_lp] = mem_fwd_v_i;
+  assign mem_fwd_ready_and_o = proc_fwd_ready_and_li[cce_proc_id_lp];
+
+  assign mem_rev_header_o = proc_rev_header_li[cce_proc_id_lp];
+  assign mem_rev_data_o = proc_rev_data_li[cce_proc_id_lp];
+  assign mem_rev_v_o = proc_rev_v_li[cce_proc_id_lp];
+  assign proc_rev_ready_and_lo[cce_proc_id_lp] = mem_rev_ready_and_i;
+
+  // Select destination of CCE-Mem command from CCE
+  logic [num_proc_lp-1:0][lg_num_dev_lp-1:0] proc_fwd_dst_lo;
+  for (genvar i = 0; i < num_proc_lp; i++)
+    begin : fwd_dest
+      bp_local_addr_s local_addr;
+      assign local_addr = proc_fwd_header_lo[i].addr;
+      wire [dev_id_width_gp-1:0] device_fwd_li = local_addr.dev;
+      wire is_local        = (local_addr < dram_base_addr_gp);
+
+      wire is_cfg_fwd      = is_local & (device_fwd_li == cfg_dev_gp);
+      wire is_clint_fwd    = is_local & (device_fwd_li == clint_dev_gp);
+
+      wire is_l2s_fwd      = ~is_local;
+      wire is_loopback_fwd = is_local & ~is_cfg_fwd & ~is_clint_fwd & ~is_l2s_fwd;
+
+      localparam lg_l2_slices_lp = `BSG_SAFE_CLOG2(l2_slices_p);
+      logic [lg_l2_slices_lp-1:0] slice_id;
+      bp_me_dram_hash_encode
+       #(.bp_params_p(bp_params_p))
+       slice_select
+        (.paddr_i(local_addr)
+         ,.data_i()
+
+         ,.dram_o()
+         ,.daddr_o()
+         ,.slice_o(slice_id)
+         ,.bank_o()
+         ,.data_o()
+         );
+
+      logic [l2_slices_p-1:0] is_l2s_slice_fwd;
+      bsg_decode_with_v
+       #(.num_out_p(l2_slices_p))
+       slice_decode
+        (.i(slice_id)
+         ,.v_i(is_l2s_fwd)
+         ,.o(is_l2s_slice_fwd)
+         );
+
+      wire [num_dev_lp-1:0] proc_fwd_dst_sel =
+        (is_cfg_fwd << cfg_dev_id_lp)
+        | (is_clint_fwd << clint_dev_id_lp)
+        | (is_l2s_slice_fwd << l2s_dev_base_id_lp)
+        | (is_loopback_fwd << loopback_dev_id_lp);
+
+      bsg_encode_one_hot
+       #(.width_p(num_dev_lp), .lo_to_hi_p(1))
+       fwd_pe
+        (.i(proc_fwd_dst_sel)
+         ,.addr_o(proc_fwd_dst_lo[i])
+         ,.v_o()
+         );
+    end
+
+  bp_me_xbar_stream
    #(.bp_params_p(bp_params_p)
-     ,.assoc_p(icache_assoc_p)
-     ,.sets_p(icache_sets_p)
-     ,.block_width_p(icache_block_width_p)
-     ,.fill_width_p(icache_fill_width_p)
-     ,.timeout_max_limit_p(4)
-     ,.credits_p(coh_noc_max_credits_p)
-     ,.non_excl_reads_p(1)
-     ,.metadata_latency_p(1)
+     ,.payload_width_p(mem_fwd_payload_width_lp)
+     ,.stream_mask_p(mem_fwd_stream_mask_gp)
+     ,.num_source_p(num_proc_lp)
+     ,.num_sink_p(num_dev_lp)
      )
-   fe_lce
+   fwd_xbar
     (.clk_i(clk_i)
      ,.reset_i(reset_i)
 
-     ,.lce_id_i(cfg_bus_cast_i.icache_id)
-     ,.lce_mode_i(cfg_bus_cast_i.icache_mode)
+     ,.msg_header_i(proc_fwd_header_lo)
+     ,.msg_data_i(proc_fwd_data_lo)
+     ,.msg_v_i(proc_fwd_v_lo)
+     ,.msg_ready_and_o(proc_fwd_ready_and_li)
+     ,.msg_dst_i(proc_fwd_dst_lo)
 
-     ,.cache_req_i(icache_req_lo)
-     ,.cache_req_v_i(icache_req_v_lo)
-     ,.cache_req_yumi_o(icache_req_yumi_li)
-     ,.cache_req_busy_o(icache_req_busy_li)
-     ,.cache_req_metadata_i(icache_req_metadata_lo)
-     ,.cache_req_metadata_v_i(icache_req_metadata_v_lo)
-     ,.cache_req_critical_tag_o(icache_req_critical_tag_li)
-     ,.cache_req_critical_data_o(icache_req_critical_data_li)
-     ,.cache_req_complete_o(icache_req_complete_li)
-     ,.cache_req_credits_full_o(icache_req_credits_full_li)
-     ,.cache_req_credits_empty_o(icache_req_credits_empty_li)
-
-     ,.tag_mem_pkt_o(icache_tag_mem_pkt_li)
-     ,.tag_mem_pkt_v_o(icache_tag_mem_pkt_v_li)
-     ,.tag_mem_pkt_yumi_i(icache_tag_mem_pkt_yumi_lo)
-     ,.tag_mem_i(icache_tag_mem_lo)
-
-     ,.data_mem_pkt_o(icache_data_mem_pkt_li)
-     ,.data_mem_pkt_v_o(icache_data_mem_pkt_v_li)
-     ,.data_mem_pkt_yumi_i(icache_data_mem_pkt_yumi_lo)
-     ,.data_mem_i(icache_data_mem_lo)
-
-     ,.stat_mem_pkt_v_o(icache_stat_mem_pkt_v_li)
-     ,.stat_mem_pkt_o(icache_stat_mem_pkt_li)
-     ,.stat_mem_pkt_yumi_i(icache_stat_mem_pkt_yumi_lo)
-     ,.stat_mem_i(icache_stat_mem_lo)
-
-     ,.lce_req_header_o(lce_req_header_o[0])
-     ,.lce_req_data_o(lce_req_data_o[0])
-     ,.lce_req_v_o(lce_req_v_o[0])
-     ,.lce_req_ready_then_i(lce_req_ready_then_i[0])
-
-     ,.lce_resp_header_o(lce_resp_header_o[0])
-     ,.lce_resp_data_o(lce_resp_data_o[0])
-     ,.lce_resp_v_o(lce_resp_v_o[0])
-     ,.lce_resp_ready_then_i(lce_resp_ready_then_i[0])
-
-     ,.lce_cmd_header_i(lce_cmd_header_i[0])
-     ,.lce_cmd_data_i(lce_cmd_data_i[0])
-     ,.lce_cmd_v_i(lce_cmd_v_i[0])
-     ,.lce_cmd_yumi_o(lce_cmd_yumi_o[0])
-
-     ,.lce_cmd_header_o(lce_cmd_header_o[0])
-     ,.lce_cmd_data_o(lce_cmd_data_o[0])
-     ,.lce_cmd_v_o(lce_cmd_v_o[0])
-     ,.lce_cmd_ready_then_i(lce_cmd_ready_then_i[0])
+     ,.msg_header_o(dev_fwd_header_li)
+     ,.msg_data_o(dev_fwd_data_li)
+     ,.msg_v_o(dev_fwd_v_li)
+     ,.msg_ready_and_i(dev_fwd_ready_and_lo)
      );
 
-  bp_lce
+  // All CCE-Mem network responses go to the CCE on this tile (id = 0 in xbar)
+  wire [num_dev_lp-1:0][lg_num_proc_lp-1:0] dev_rev_dst_lo = '0;
+  bp_me_xbar_stream
    #(.bp_params_p(bp_params_p)
-     ,.assoc_p(dcache_assoc_p)
-     ,.sets_p(dcache_sets_p)
-     ,.block_width_p(dcache_block_width_p)
-     ,.fill_width_p(dcache_fill_width_p)
-     ,.timeout_max_limit_p(4)
-     ,.credits_p(coh_noc_max_credits_p)
-     ,.req_invert_clk_p(1)
-     ,.data_mem_invert_clk_p(1)
-     ,.tag_mem_invert_clk_p(1)
-     ,.metadata_latency_p(1)
+     ,.payload_width_p(mem_rev_payload_width_lp)
+     ,.stream_mask_p(mem_rev_stream_mask_gp)
+     ,.num_source_p(num_dev_lp)
+     ,.num_sink_p(num_proc_lp)
      )
-   be_lce
+   rev_xbar
     (.clk_i(clk_i)
      ,.reset_i(reset_i)
 
-     ,.lce_id_i(cfg_bus_cast_i.dcache_id)
-     ,.lce_mode_i(cfg_bus_cast_i.dcache_mode)
+     ,.msg_header_i(dev_rev_header_lo)
+     ,.msg_data_i(dev_rev_data_lo)
+     ,.msg_v_i(dev_rev_v_lo)
+     ,.msg_ready_and_o(dev_rev_ready_and_li)
+     ,.msg_dst_i(dev_rev_dst_lo)
 
-     ,.cache_req_i(dcache_req_lo)
-     ,.cache_req_v_i(dcache_req_v_lo)
-     ,.cache_req_yumi_o(dcache_req_yumi_li)
-     ,.cache_req_busy_o(dcache_req_busy_li)
-     ,.cache_req_metadata_i(dcache_req_metadata_lo)
-     ,.cache_req_metadata_v_i(dcache_req_metadata_v_lo)
-     ,.cache_req_critical_tag_o(dcache_req_critical_tag_li)
-     ,.cache_req_critical_data_o(dcache_req_critical_data_li)
-     ,.cache_req_complete_o(dcache_req_complete_li)
-     ,.cache_req_credits_full_o(dcache_req_credits_full_li)
-     ,.cache_req_credits_empty_o(dcache_req_credits_empty_li)
+     ,.msg_header_o(proc_rev_header_li)
+     ,.msg_data_o(proc_rev_data_li)
+     ,.msg_v_o(proc_rev_v_li)
+     ,.msg_ready_and_i(proc_rev_ready_and_lo)
+     );
 
-     ,.tag_mem_pkt_o(dcache_tag_mem_pkt_li)
-     ,.tag_mem_pkt_v_o(dcache_tag_mem_pkt_v_li)
-     ,.tag_mem_pkt_yumi_i(dcache_tag_mem_pkt_yumi_lo)
-     ,.tag_mem_i(dcache_tag_mem_lo)
+  // Config
+  bp_me_cfg_slice
+   #(.bp_params_p(bp_params_p))
+   cfg
+    (.clk_i(clk_i)
+     ,.reset_i(reset_i)
 
-     ,.data_mem_pkt_o(dcache_data_mem_pkt_li)
-     ,.data_mem_pkt_v_o(dcache_data_mem_pkt_v_li)
-     ,.data_mem_pkt_yumi_i(dcache_data_mem_pkt_yumi_lo)
-     ,.data_mem_i(dcache_data_mem_lo)
+     ,.mem_fwd_header_i(dev_fwd_header_li[cfg_dev_id_lp])
+     ,.mem_fwd_data_i(dev_fwd_data_li[cfg_dev_id_lp])
+     ,.mem_fwd_v_i(dev_fwd_v_li[cfg_dev_id_lp])
+     ,.mem_fwd_ready_and_o(dev_fwd_ready_and_lo[cfg_dev_id_lp])
 
-     ,.stat_mem_pkt_v_o(dcache_stat_mem_pkt_v_li)
-     ,.stat_mem_pkt_o(dcache_stat_mem_pkt_li)
-     ,.stat_mem_pkt_yumi_i(dcache_stat_mem_pkt_yumi_lo)
-     ,.stat_mem_i(dcache_stat_mem_lo)
+     ,.mem_rev_header_o(dev_rev_header_lo[cfg_dev_id_lp])
+     ,.mem_rev_data_o(dev_rev_data_lo[cfg_dev_id_lp])
+     ,.mem_rev_v_o(dev_rev_v_lo[cfg_dev_id_lp])
+     ,.mem_rev_ready_and_i(dev_rev_ready_and_li[cfg_dev_id_lp])
 
-     ,.lce_req_header_o(lce_req_header_o[1])
-     ,.lce_req_data_o(lce_req_data_o[1])
-     ,.lce_req_v_o(lce_req_v_o[1])
-     ,.lce_req_ready_then_i(lce_req_ready_then_i[1])
+     ,.cfg_bus_o(cfg_bus_lo)
+     ,.did_i(my_did_i)
+     ,.host_did_i(host_did_i)
+     ,.cord_i(my_cord_i)
 
-     ,.lce_resp_header_o(lce_resp_header_o[1])
-     ,.lce_resp_data_o(lce_resp_data_o[1])
-     ,.lce_resp_v_o(lce_resp_v_o[1])
-     ,.lce_resp_ready_then_i(lce_resp_ready_then_i[1])
+     ,.cce_ucode_v_o(cce_ucode_v_o)
+     ,.cce_ucode_w_o(cce_ucode_w_o)
+     ,.cce_ucode_addr_o(cce_ucode_addr_o)
+     ,.cce_ucode_data_o(cce_ucode_data_o)
+     ,.cce_ucode_data_i(cce_ucode_data_i)
+     );
+  assign cfg_bus_o = cfg_bus_lo;
 
-     ,.lce_cmd_header_i(lce_cmd_header_i[1])
-     ,.lce_cmd_data_i(lce_cmd_data_i[1])
-     ,.lce_cmd_v_i(lce_cmd_v_i[1])
-     ,.lce_cmd_yumi_o(lce_cmd_yumi_o[1])
 
-     ,.lce_cmd_header_o(lce_cmd_header_o[1])
-     ,.lce_cmd_data_o(lce_cmd_data_o[1])
-     ,.lce_cmd_v_o(lce_cmd_v_o[1])
-     ,.lce_cmd_ready_then_i(lce_cmd_ready_then_i[1])
+  // CLINT
+  bp_me_clint_slice
+   #(.bp_params_p(bp_params_p))
+   clint
+    (.clk_i(clk_i)
+     ,.rt_clk_i(rt_clk_i)
+     ,.reset_i(reset_i)
+     ,.cfg_bus_i(cfg_bus_lo)
+
+     ,.mem_fwd_header_i(dev_fwd_header_li[clint_dev_id_lp])
+     ,.mem_fwd_data_i(dev_fwd_data_li[clint_dev_id_lp])
+     ,.mem_fwd_v_i(dev_fwd_v_li[clint_dev_id_lp])
+     ,.mem_fwd_ready_and_o(dev_fwd_ready_and_lo[clint_dev_id_lp])
+
+     ,.mem_rev_header_o(dev_rev_header_lo[clint_dev_id_lp])
+     ,.mem_rev_data_o(dev_rev_data_lo[clint_dev_id_lp])
+     ,.mem_rev_v_o(dev_rev_v_lo[clint_dev_id_lp])
+     ,.mem_rev_ready_and_i(dev_rev_ready_and_li[clint_dev_id_lp])
+
+     ,.debug_irq_o(debug_irq_li)
+     ,.timer_irq_o(timer_irq_li)
+     ,.software_irq_o(software_irq_li)
+     ,.m_external_irq_o(m_external_irq_li)
+     ,.s_external_irq_o(s_external_irq_li)
+     );
+
+  // CCE-Mem network to L2 Cache adapter
+  for (genvar i = 0; i < l2_slices_p; i++)
+    begin : slices
+      bp_me_cache_slice
+       #(.bp_params_p(bp_params_p))
+       l2s
+        (.clk_i(clk_i)
+         ,.reset_i(reset_i)
+
+         ,.mem_fwd_header_i(dev_fwd_header_li[l2s_dev_base_id_lp+i])
+         ,.mem_fwd_data_i(dev_fwd_data_li[l2s_dev_base_id_lp+i])
+         ,.mem_fwd_v_i(dev_fwd_v_li[l2s_dev_base_id_lp+i])
+         ,.mem_fwd_ready_and_o(dev_fwd_ready_and_lo[l2s_dev_base_id_lp+i])
+
+         ,.mem_rev_header_o(dev_rev_header_lo[l2s_dev_base_id_lp+i])
+         ,.mem_rev_data_o(dev_rev_data_lo[l2s_dev_base_id_lp+i])
+         ,.mem_rev_v_o(dev_rev_v_lo[l2s_dev_base_id_lp+i])
+         ,.mem_rev_ready_and_i(dev_rev_ready_and_li[l2s_dev_base_id_lp+i])
+
+         ,.dma_pkt_o(dma_pkt_o[i])
+         ,.dma_pkt_v_o(dma_pkt_v_o[i])
+         ,.dma_pkt_ready_and_i(dma_pkt_ready_and_i[i])
+
+         ,.dma_data_i(dma_data_i[i])
+         ,.dma_data_v_i(dma_data_v_i[i])
+         ,.dma_data_ready_and_o(dma_data_ready_and_o[i])
+
+         ,.dma_data_o(dma_data_o[i])
+         ,.dma_data_v_o(dma_data_v_o[i])
+         ,.dma_data_ready_and_i(dma_data_ready_and_i[i])
+         );
+    end
+
+  // Loopback
+  bp_me_loopback
+   #(.bp_params_p(bp_params_p))
+   loopback
+    (.clk_i(clk_i)
+     ,.reset_i(reset_i)
+
+     ,.mem_fwd_header_i(dev_fwd_header_li[loopback_dev_id_lp])
+     ,.mem_fwd_data_i(dev_fwd_data_li[loopback_dev_id_lp])
+     ,.mem_fwd_v_i(dev_fwd_v_li[loopback_dev_id_lp])
+     ,.mem_fwd_ready_and_o(dev_fwd_ready_and_lo[loopback_dev_id_lp])
+
+     ,.mem_rev_header_o(dev_rev_header_lo[loopback_dev_id_lp])
+     ,.mem_rev_data_o(dev_rev_data_lo[loopback_dev_id_lp])
+     ,.mem_rev_v_o(dev_rev_v_lo[loopback_dev_id_lp])
+     ,.mem_rev_ready_and_i(dev_rev_ready_and_li[loopback_dev_id_lp])
      );
 
 endmodule

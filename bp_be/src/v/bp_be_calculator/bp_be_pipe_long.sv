@@ -7,15 +7,14 @@ module bp_be_pipe_long
  import bp_be_pkg::*;
  #(parameter bp_params_e bp_params_p = e_bp_default_cfg
    `declare_bp_proc_params(bp_params_p)
-
-   , localparam dispatch_pkt_width_lp = `bp_be_dispatch_pkt_width(vaddr_width_p)
-   , localparam wb_pkt_width_lp = `bp_be_wb_pkt_width(vaddr_width_p)
+   `declare_bp_be_if_widths(vaddr_width_p, paddr_width_p, asid_width_p, branch_metadata_fwd_width_p, fetch_ptr_p, issue_ptr_p)
    )
   (input                                clk_i
    , input                              reset_i
 
-   , input [dispatch_pkt_width_lp-1:0]  reservation_i
-   , output logic                       ready_o
+   , input [reservation_width_lp-1:0]   reservation_i
+   , output logic                       ibusy_o
+   , output logic                       fbusy_o
    , input rv64_frm_e                   frm_dyn_i
 
    , input                              flush_i
@@ -29,46 +28,79 @@ module bp_be_pipe_long
    , input                              fwb_yumi_i
    );
 
-  `declare_bp_be_internal_if_structs(vaddr_width_p, paddr_width_p, asid_width_p, branch_metadata_fwd_width_p);
-  bp_be_dispatch_pkt_s reservation;
-  rv64_instr_fmatype_s instr;
+  `declare_bp_be_if(vaddr_width_p, paddr_width_p, asid_width_p, branch_metadata_fwd_width_p, fetch_ptr_p, issue_ptr_p);
+  `bp_cast_o(bp_be_wb_pkt_s, iwb_pkt);
+  `bp_cast_o(bp_be_wb_pkt_s, fwb_pkt);
+  bp_be_reservation_s reservation;
+  rv64_instr_s instr;
   bp_be_decode_s decode;
-  bp_be_wb_pkt_s iwb_pkt;
-  bp_be_wb_pkt_s fwb_pkt;
-
-  assign iwb_pkt_o = iwb_pkt;
-  assign fwb_pkt_o = fwb_pkt;
 
   assign reservation = reservation_i;
   assign decode = reservation.decode;
   assign instr  = reservation.instr;
-  wire [vaddr_width_p-1:0] pc  = reservation.pc[0+:vaddr_width_p];
-  wire [dword_width_gp-1:0] rs1 = reservation.rs1[0+:dword_width_gp];
-  wire [dword_width_gp-1:0] rs2 = reservation.rs2[0+:dword_width_gp];
-  wire [dword_width_gp-1:0] imm = reservation.imm[0+:dword_width_gp];
+  wire [vaddr_width_p-1:0] pc  = reservation.pc;
+  wire [dp_rec_width_gp-1:0] frs1 = reservation.fsrc1;
+  wire [dp_rec_width_gp-1:0] frs2 = reservation.fsrc2;
+  wire [dp_rec_width_gp-1:0] frs3 = reservation.fsrc3;
+  wire [dword_width_gp-1:0]  irs1 = reservation.isrc1;
+  wire [dword_width_gp-1:0]  irs2 = reservation.isrc2;
+  wire [dword_width_gp-1:0]  irs3 = reservation.isrc3;
 
-  wire v_li = reservation.v & reservation.decode.pipe_long_v & (reservation.decode.late_iwb_v | reservation.decode.late_fwb_v);
+  wire int_v_li = reservation.v & reservation.decode.pipe_long_v & reservation.decode.irf_w_v;
+  wire fp_v_li = reservation.v & reservation.decode.pipe_long_v & reservation.decode.frf_w_v;
 
-  wire signed_div_li = decode.fu_op inside {e_mul_op_div, e_mul_op_rem};
-  wire rem_not_div_li = decode.fu_op inside {e_mul_op_rem, e_mul_op_remu};
+  logic fmask_r, imask_r;
+  bsg_dff
+   #(.width_p(2))
+   mask_reg
+    (.clk_i(clk_i)
+     ,.data_i({fp_v_li, int_v_li})
+     ,.data_o({fmask_r, imask_r})
+     );
+  wire flush_int_li = flush_i & (imask_r | int_v_li);
+  wire flush_fp_li  = flush_i & (fmask_r | fp_v_li);
 
-  wire [dword_width_gp-1:0] op_a = decode.opw_v ? (rs1 << word_width_gp) : rs1;
-  wire [dword_width_gp-1:0] op_b = decode.opw_v ? (rs2 << word_width_gp) : rs2;
+  wire signed_div_li = decode.fu_op inside {e_long_op_div, e_long_op_rem};
+  wire rem_not_div_li = decode.fu_op inside {e_long_op_rem, e_long_op_remu};
+
+  wire signed_opA_li = decode.fu_op inside {e_long_op_div, e_long_op_rem, e_long_op_mulh, e_long_op_mulhsu};
+  wire signed_opB_li = decode.fu_op inside {e_long_op_div, e_long_op_rem, e_long_op_mulh};
+
+  logic [dword_width_gp-1:0] imulh_result_lo;
+  logic imulh_ready_lo, imulh_v_lo;
+  wire imulh_v_li = int_v_li & (decode.fu_op inside {e_long_op_mulh, e_long_op_mulhsu, e_long_op_mulhu});
+  bsg_imul_iterative
+   #(.width_p(dword_width_gp))
+   imulh
+    (.clk_i(clk_i)
+    ,.reset_i(reset_i | flush_int_li)
+    ,.v_i(imulh_v_li)
+    ,.ready_and_o(imulh_ready_lo)
+    ,.opA_i(irs1)
+    ,.signed_opA_i(signed_opA_li)
+    ,.opB_i(irs2)
+    ,.signed_opB_i(signed_opB_li)
+    ,.gets_high_part_i(1'b1)
+    ,.v_o(imulh_v_lo)
+    ,.result_o(imulh_result_lo)
+    ,.yumi_i(imulh_v_lo & iwb_yumi_i)
+    );
 
   // We actual could exit early here
   logic [dword_width_gp-1:0] quotient_lo, remainder_lo;
   logic idiv_ready_and_lo;
   logic idiv_v_lo;
-  wire idiv_v_li = v_li & (decode.fu_op inside {e_mul_op_div, e_mul_op_divu});
-  wire irem_v_li = v_li & (decode.fu_op inside {e_mul_op_rem, e_mul_op_remu});
+  wire idiv_v_li = int_v_li & (decode.fu_op inside {e_long_op_div, e_long_op_divu});
+  wire irem_v_li = int_v_li & (decode.fu_op inside {e_long_op_rem, e_long_op_remu});
+  localparam idiv_bits_per_iter_lp = muldiv_support_p[e_idiv2b] ? 2'b10 : 2'b01;
   bsg_idiv_iterative
-   #(.width_p(dword_width_gp))
+   #(.width_p(dword_width_gp), .bits_per_iter_p(idiv_bits_per_iter_lp))
    idiv
     (.clk_i(clk_i)
-     ,.reset_i(reset_i)
+     ,.reset_i(reset_i | flush_int_li)
 
-     ,.dividend_i(op_a)
-     ,.divisor_i(op_b)
+     ,.dividend_i(irs1)
+     ,.divisor_i(irs2)
      ,.signed_div_i(signed_div_li)
      ,.v_i(idiv_v_li | irem_v_li)
      ,.ready_and_o(idiv_ready_and_lo)
@@ -78,43 +110,79 @@ module bp_be_pipe_long
      ,.v_o(idiv_v_lo)
      ,.yumi_i(idiv_v_lo & iwb_yumi_i)
      );
-  wire [word_width_gp-1:0] quotient_w_lo = quotient_lo[0+:word_width_gp];
-  wire [word_width_gp-1:0] remainder_w_lo = remainder_lo[0+:word_width_gp];
 
-  bp_be_fp_reg_s frs1, frs2;
-  assign frs1 = reservation.rs1;
-  assign frs2 = reservation.rs2;
+  logic [reg_addr_width_gp-1:0] ird_addr_r;
+  bp_be_fu_op_s fu_op_r;
+  logic [$bits(bp_be_int_tag_e)-1:0] ird_tag_r;
+  bsg_dff_en
+   #(.width_p(reg_addr_width_gp+$bits(bp_be_fu_op_s)+$bits(ird_tag_r)))
+   iwb_reg
+    (.clk_i(clk_i)
+     ,.en_i(imulh_v_li | idiv_v_li | irem_v_li)
+
+     ,.data_i({instr.t.fmatype.rd_addr, decode.fu_op, decode.ird_tag})
+     ,.data_o({ird_addr_r, fu_op_r, ird_tag_r})
+     );
+
+  logic [dword_width_gp-1:0] iresult;
+  always_comb
+    case (fu_op_r)
+      e_long_op_rem, e_long_op_remu: iresult = remainder_lo;
+      e_long_op_div, e_long_op_divu: iresult = quotient_lo;
+      // e_long_op_mulh, e_long_op_mulhsu, e_long_op_mulhu
+      default: iresult = imulh_result_lo;
+    endcase
+
+  logic [dpath_width_gp-1:0] ird_data_lo;
+  bp_be_int_box
+   #(.bp_params_p(bp_params_p))
+   ird_box
+    (.raw_i(iresult)
+     ,.tag_i(ird_tag_r)
+     ,.unsigned_i(1'b0)
+     ,.reg_o(ird_data_lo)
+     );
+
+  assign ibusy_o = int_v_li | ~imulh_ready_lo | ~idiv_ready_and_lo | imask_r;
+  assign iwb_v_o = ~imask_r & (imulh_v_lo | idiv_v_lo);
+  assign iwb_pkt_cast_o = '{ird_w_v : iwb_v_o
+                            ,rd_addr: ird_addr_r
+                            ,rd_data: ird_data_lo
+                            ,default: '0
+                            };
 
   //
   // Control bits for the FPU
   //   The control bits control tininess, which is fixed in RISC-V
   rv64_frm_e frm_li;
-  assign frm_li = (instr.rm == e_dyn) ? frm_dyn_i : rv64_frm_e'(instr.rm);
+  // VCS / DVE 2016.1 has an issue with the 'assign' variant of the following code
+  always_comb frm_li = rv64_frm_e'((instr.t.fmatype.rm == e_dyn) ? frm_dyn_i : instr.t.fmatype.rm);
   wire [`floatControlWidth-1:0] control_li = `flControl_default;
 
-  wire fdiv_v_li  = v_li & (decode.fu_op == e_fma_op_fdiv);
-  wire fsqrt_v_li = v_li & (decode.fu_op == e_fma_op_fsqrt);
+  wire fdiv_v_li  = fp_v_li & (decode.fu_op inside {e_long_op_fdiv});
+  wire fsqrt_v_li = fp_v_li & (decode.fu_op inside {e_long_op_fsqrt});
+  wire fdivsqrt_v_li = fdiv_v_li | fsqrt_v_li;
 
-  logic fdiv_ready_lo, fdivsqrt_v_lo;
-  logic sqrt_lo;
+  logic fdivsqrt_ready_and_lo, fdivsqrt_v_lo;
+  logic sqrt_lo, invalid_exc, infinite_exc;
   logic [2:0] frm_lo;
-  logic invalid_exc, infinite_exc;
-  logic is_nan, is_inf, is_zero;
-  logic fdivsqrt_out_sign;
-  logic [dp_exp_width_gp+1:0] fdivsqrt_out_sexp;
-  logic [dp_sig_width_gp+2:0] fdivsqrt_out_sig;
-  divSqrtRecFNToRaw_small
-   #(.expWidth(dp_exp_width_gp), .sigWidth(dp_sig_width_gp))
+  bp_hardfloat_raw_dp_s fdivsqrt_raw_lo;
+  localparam fdivsqrt_bits_per_iter_lp = fpu_support_p[e_fdivsqrt2b] ? 2'b10 : 2'b01;
+  divSqrtRecFNToRaw
+   #(.expWidth(dp_exp_width_gp)
+     ,.sigWidth(dp_sig_width_gp)
+     ,.bits_per_iter_p(fdivsqrt_bits_per_iter_lp)
+     )
    fdiv
     (.clock(clk_i)
-     ,.nReset(~reset_i)
+     ,.nReset(~reset_i & ~flush_fp_li)
      ,.control(control_li)
 
-     ,.inReady(fdiv_ready_lo)
-     ,.inValid(fdiv_v_li | fsqrt_v_li)
+     ,.inReady(fdivsqrt_ready_and_lo)
+     ,.inValid(fdivsqrt_v_li)
      ,.sqrtOp(fsqrt_v_li)
-     ,.a(frs1.rec)
-     ,.b(frs2.rec)
+     ,.a(frs1)
+     ,.b(frs2)
      ,.roundingMode(frm_li)
 
      ,.outValid(fdivsqrt_v_lo)
@@ -122,149 +190,64 @@ module bp_be_pipe_long
      ,.roundingModeOut(frm_lo)
      ,.invalidExc(invalid_exc)
      ,.infiniteExc(infinite_exc)
-     ,.out_isNaN(is_nan)
-     ,.out_isInf(is_inf)
-     ,.out_isZero(is_zero)
-     ,.out_sign(fdivsqrt_out_sign)
-     ,.out_sExp(fdivsqrt_out_sexp)
-     ,.out_sig(fdivsqrt_out_sig)
+
+     ,.out_isNaN(fdivsqrt_raw_lo.is_nan)
+     ,.out_isInf(fdivsqrt_raw_lo.is_inf)
+     ,.out_isZero(fdivsqrt_raw_lo.is_zero)
+     ,.out_sign(fdivsqrt_raw_lo.sign)
+     ,.out_sExp(fdivsqrt_raw_lo.sexp)
+     ,.out_sig(fdivsqrt_raw_lo.sig)
      );
 
-  logic opw_v_r, ops_v_r;
-  bp_be_fu_op_s fu_op_r;
-  logic [reg_addr_width_gp-1:0] rd_addr_r;
-  rv64_frm_e frm_r;
+  // outValid of fdivsqrt only goes high one cycle
+  logic fdivsqrt_pending_r;
   bsg_dff_reset_en
-   #(.width_p($bits(rv64_frm_e)+reg_addr_width_gp+$bits(bp_be_fu_op_s)+2))
-   wb_reg
+   #(.width_p(1))
+   fdivsqrt_pending_reg
     (.clk_i(clk_i)
-     ,.reset_i(reset_i)
-     ,.en_i(v_li)
-
-     ,.data_i({frm_li, instr.rd_addr, decode.fu_op, decode.opw_v, decode.ops_v})
-     ,.data_o({frm_r, rd_addr_r, fu_op_r, opw_v_r, ops_v_r})
+     ,.reset_i(reset_i | flush_fp_li)
+     ,.en_i(fdivsqrt_v_lo | fwb_yumi_i)
+     ,.data_i(fdivsqrt_v_lo & ~fwb_yumi_i)
+     ,.data_o(fdivsqrt_pending_r)
      );
+  wire fdivsqrt_pending = fdivsqrt_v_lo | fdivsqrt_pending_r;
 
-  logic idiv_done_v_r, fdiv_done_v_r, rd_w_v_r;
-  bsg_dff_reset_set_clear
-   #(.width_p(3))
-   wb_v_reg
+  bp_be_fp_tag_e frd_tag_r;
+  logic [reg_addr_width_gp-1:0] frd_addr_r;
+  rv64_frm_e frm_r;
+  bsg_dff_en
+   #(.width_p($bits(rv64_frm_e)+reg_addr_width_gp+1))
+   fwb_reg
     (.clk_i(clk_i)
-     ,.reset_i(reset_i)
+     ,.en_i(fdivsqrt_v_li)
 
-     ,.set_i({idiv_v_lo, fdivsqrt_v_lo, v_li})
-     ,.clear_i({v_li, v_li, (iwb_yumi_i | fwb_yumi_i)})
-     ,.data_o({idiv_done_v_r, fdiv_done_v_r, rd_w_v_r})
+     ,.data_i({frm_li, instr.t.fmatype.rd_addr, decode.frd_tag})
+     ,.data_o({frm_r, frd_addr_r, frd_tag_r})
      );
 
-  logic [2:0] hazard_cnt;
-  wire idiv_safe = (hazard_cnt > 2);
-  wire fdiv_safe = (hazard_cnt > 3);
-  bsg_counter_clear_up
-   #(.max_val_p(4), .init_val_p(0))
-   hazard_counter
-    (.clk_i(clk_i)
-     ,.reset_i(reset_i)
+  bp_be_fp_reg_s frd_data_lo;
+  rv64_fflags_s fflags_lo;
+  bp_be_fp_rebox
+   #(.bp_params_p(bp_params_p))
+   rebox
+    (.raw_i(fdivsqrt_raw_lo)
+     ,.tag_i(frd_tag_r)
+     ,.frm_i(frm_r)
+     ,.invalid_exc_i(invalid_exc)
+     ,.infinite_exc_i(infinite_exc)
 
-     ,.clear_i(v_li)
-     ,.up_i(rd_w_v_r & ~fdiv_safe)
-     ,.count_o(hazard_cnt)
+     ,.reg_o(frd_data_lo)
+     ,.fflags_o(fflags_lo)
      );
 
-  logic [dp_rec_width_gp-1:0] fdivsqrt_dp_final;
-  rv64_fflags_s fdivsqrt_dp_fflags;
-  roundAnyRawFNToRecFN
-   #(.inExpWidth(dp_exp_width_gp)
-     ,.inSigWidth(dp_sig_width_gp+2)
-     ,.outExpWidth(dp_exp_width_gp)
-     ,.outSigWidth(dp_sig_width_gp)
-     )
-   round_dp
-    (.control(control_li)
-     ,.invalidExc(invalid_exc)
-     ,.infiniteExc('0)
-     ,.in_isNaN(is_nan)
-     ,.in_isInf(is_inf)
-     ,.in_isZero(is_zero)
-     ,.in_sign(fdivsqrt_out_sign)
-     ,.in_sExp(fdivsqrt_out_sexp)
-     ,.in_sig(fdivsqrt_out_sig)
-     ,.roundingMode(frm_r)
-     ,.out(fdivsqrt_dp_final)
-     ,.exceptionFlags(fdivsqrt_dp_fflags)
-     );
-
-  bp_hardfloat_rec_sp_s fdivsqrt_sp_final;
-  rv64_fflags_s fdivsqrt_sp_fflags;
-  roundAnyRawFNToRecFN
-   #(.inExpWidth(dp_exp_width_gp)
-     ,.inSigWidth(dp_sig_width_gp+2)
-     ,.outExpWidth(sp_exp_width_gp)
-     ,.outSigWidth(sp_sig_width_gp)
-     )
-   round_sp
-    (.control(control_li)
-     ,.invalidExc(invalid_exc)
-     ,.infiniteExc('0)
-     ,.in_isNaN(is_nan)
-     ,.in_isInf(is_inf)
-     ,.in_isZero(is_zero)
-     ,.in_sign(fdivsqrt_out_sign)
-     ,.in_sExp(fdivsqrt_out_sexp)
-     ,.in_sig(fdivsqrt_out_sig)
-     ,.roundingMode(frm_r)
-     ,.out(fdivsqrt_sp_final)
-     ,.exceptionFlags(fdivsqrt_sp_fflags)
-     );
-
-  localparam bias_adj_lp = (1 << dp_exp_width_gp) - (1 << sp_exp_width_gp);
-  bp_hardfloat_rec_dp_s fdivsqrt_sp2dp_final;
-
-  bp_be_fp_reg_s fdivsqrt_result;
-  rv64_fflags_s fdivsqrt_fflags;
-  assign fdivsqrt_result = '{sp_not_dp: ops_v_r, rec: ops_v_r ? fdivsqrt_sp2dp_final : fdivsqrt_dp_final};
-  assign fdivsqrt_fflags = ops_v_r ? fdivsqrt_sp_fflags : fdivsqrt_dp_fflags;
-
-  wire [dp_exp_width_gp:0] adjusted_exp = fdivsqrt_sp_final.exp + bias_adj_lp;
-  wire [2:0]                   exp_code = fdivsqrt_sp_final.exp[sp_exp_width_gp-:3];
-  wire                          special = (exp_code == '0) || (exp_code >= 3'd6);
-
-  assign fdivsqrt_sp2dp_final = '{sign  : fdivsqrt_sp_final.sign
-                                  ,exp  : special ? {exp_code, adjusted_exp[0+:dp_exp_width_gp-2]} : adjusted_exp
-                                  ,fract: {fdivsqrt_sp_final.fract, (dp_sig_width_gp-sp_sig_width_gp)'(0)}
-                                  };
-
-  logic [dword_width_gp-1:0] rd_data_lo;
-  always_comb
-    if (opw_v_r && fu_op_r inside {e_mul_op_div, e_mul_op_divu})
-      rd_data_lo = `BSG_SIGN_EXTEND(quotient_w_lo, dword_width_gp);
-    else if (opw_v_r && fu_op_r inside {e_mul_op_rem, e_mul_op_remu})
-      rd_data_lo = $signed(remainder_lo) >>> word_width_gp;
-    else if (~opw_v_r && fu_op_r inside {e_mul_op_div, e_mul_op_divu})
-      rd_data_lo = quotient_lo;
-    else
-      rd_data_lo = remainder_lo;
-
-  // Actually a busy signal
-  assign ready_o = fdiv_ready_lo & idiv_ready_and_lo & ~rd_w_v_r & ~v_li;
-
-  assign iwb_pkt.ird_w_v    = rd_w_v_r;
-  assign iwb_pkt.frd_w_v    = 1'b0;
-  assign iwb_pkt.late       = 1'b1;
-  assign iwb_pkt.rd_addr    = rd_addr_r;
-  assign iwb_pkt.rd_data    = rd_data_lo;
-  assign iwb_pkt.fflags_w_v = 1'b0;
-  assign iwb_pkt.fflags     = '0;
-  assign iwb_v_o = idiv_safe & idiv_done_v_r & rd_w_v_r;
-
-  assign fwb_pkt.ird_w_v    = 1'b0;
-  assign fwb_pkt.frd_w_v    = rd_w_v_r;
-  assign fwb_pkt.late       = 1'b1;
-  assign fwb_pkt.rd_addr    = rd_addr_r;
-  assign fwb_pkt.rd_data    = fdivsqrt_result;
-  assign fwb_pkt.fflags_w_v = 1'b1;
-  assign fwb_pkt.fflags     = fdivsqrt_fflags;
-  assign fwb_v_o = fdiv_safe & fdiv_done_v_r & rd_w_v_r;
+  assign fbusy_o = fdivsqrt_v_li | ~fdivsqrt_ready_and_lo | fmask_r | fdivsqrt_pending;
+  assign fwb_v_o = ~fmask_r & (fdivsqrt_v_lo | fdivsqrt_pending);
+  assign fwb_pkt_cast_o = '{frd_w_v : fwb_v_o
+                            ,rd_addr: frd_addr_r
+                            ,rd_data: frd_data_lo
+                            ,fflags : fflags_lo & {5{fwb_v_o}}
+                            ,default: '0
+                            };
 
 endmodule
 

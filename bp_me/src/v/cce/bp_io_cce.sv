@@ -4,6 +4,10 @@
  *   bp_io_cce.sv
  *
  * Description:
+ *   This module acts as a CCE for uncacheable IO memory accesses.
+ *
+ e   It converts uncached load and store LCE  to IO requests, and
+ *   converts uncached IO responses to uncached LCE command messages.
  *
  */
 
@@ -15,70 +19,193 @@ module bp_io_cce
  import bp_me_pkg::*;
  #(parameter bp_params_e bp_params_p = e_bp_default_cfg
    `declare_bp_proc_params(bp_params_p)
-   `declare_bp_bedrock_lce_if_widths(paddr_width_p, lce_id_width_p, cce_id_width_p, lce_assoc_p, lce)
-   `declare_bp_bedrock_mem_if_widths(paddr_width_p, did_width_p, lce_id_width_p, lce_assoc_p, cce)
+   `declare_bp_bedrock_if_widths(paddr_width_p, lce_id_width_p, cce_id_width_p, did_width_p, lce_assoc_p)
    )
-  (input                                        clk_i
-   , input                                      reset_i
+  (input                                          clk_i
+   , input                                        reset_i
 
-   , input [did_width_p-1:0]                    did_i
-   , input [cce_id_width_p-1:0]                 cce_id_i
+   , input [cce_id_width_p-1:0]                   cce_id_i
 
-   , input [lce_req_header_width_lp-1:0]        lce_req_header_i
-   , input [cce_block_width_p-1:0]              lce_req_data_i
-   , input                                      lce_req_v_i
-   , output logic                               lce_req_ready_and_o
+   // LCE-CCE Interface
+   // BedRock Burst protocol: ready&valid
+   , input [lce_req_header_width_lp-1:0]          lce_req_header_i
+   , input [bedrock_fill_width_p-1:0]             lce_req_data_i
+   , input                                        lce_req_v_i
+   , output logic                                 lce_req_ready_and_o
 
-   , output logic [lce_cmd_header_width_lp-1:0] lce_cmd_header_o
-   , output logic [cce_block_width_p-1:0]       lce_cmd_data_o
-   , output logic                               lce_cmd_v_o
-   , input                                      lce_cmd_ready_and_i
+   , output logic [lce_cmd_header_width_lp-1:0]   lce_cmd_header_o
+   , output logic [bedrock_fill_width_p-1:0]      lce_cmd_data_o
+   , output logic                                 lce_cmd_v_o
+   , input                                        lce_cmd_ready_and_i
 
-   , input [cce_mem_header_width_lp-1:0]        io_resp_header_i
-   , input [cce_block_width_p-1:0]              io_resp_data_i
-   , input                                      io_resp_v_i
-   , output logic                               io_resp_ready_and_o
+   , input [mem_rev_header_width_lp-1:0]          mem_rev_header_i
+   , input [bedrock_fill_width_p-1:0]             mem_rev_data_i
+   , input                                        mem_rev_v_i
+   , output logic                                 mem_rev_ready_and_o
 
-   , output logic [cce_mem_header_width_lp-1:0] io_cmd_header_o
-   , output logic [cce_block_width_p-1:0]       io_cmd_data_o
-   , output logic                               io_cmd_v_o
-   , input                                      io_cmd_ready_and_i
+   , output logic [mem_fwd_header_width_lp-1:0]   mem_fwd_header_o
+   , output logic [bedrock_fill_width_p-1:0]      mem_fwd_data_o
+   , output logic                                 mem_fwd_v_o
+   , input                                        mem_fwd_ready_and_i
    );
 
-  `declare_bp_bedrock_lce_if(paddr_width_p, lce_id_width_p, cce_id_width_p, lce_assoc_p, lce);
-  `declare_bp_bedrock_mem_if(paddr_width_p, did_width_p, lce_id_width_p, lce_assoc_p, cce);
+  `declare_bp_bedrock_if(paddr_width_p, lce_id_width_p, cce_id_width_p, did_width_p, lce_assoc_p);
   `bp_cast_i(bp_bedrock_lce_req_header_s, lce_req_header);
+  `bp_cast_o(bp_bedrock_mem_fwd_header_s, mem_fwd_header);
+  `bp_cast_i(bp_bedrock_mem_rev_header_s, mem_rev_header);
   `bp_cast_o(bp_bedrock_lce_cmd_header_s, lce_cmd_header);
-  `bp_cast_o(bp_bedrock_cce_mem_header_s, io_cmd_header);
-  `bp_cast_i(bp_bedrock_cce_mem_header_s, io_resp_header);
 
-  assign lce_req_ready_and_o = io_cmd_ready_and_i;
-  assign io_cmd_v_o          = lce_req_v_i;
-  wire lce_req_wr_not_rd = (lce_req_header_cast_i.msg_type.req == e_bedrock_req_uc_wr);
+  bp_bedrock_lce_req_header_s fsm_req_header_lo;
+  logic [bedrock_fill_width_p-1:0] fsm_req_data_lo;
+  logic fsm_req_v_lo, fsm_req_yumi_li;
+  logic [paddr_width_p-1:0] fsm_req_addr_lo;
+  logic fsm_req_new_lo, fsm_req_critical_lo, fsm_req_last_lo;
+  bp_me_stream_pump_in
+   #(.bp_params_p(bp_params_p)
+     ,.data_width_p(bedrock_fill_width_p)
+     ,.payload_width_p(lce_req_payload_width_lp)
+     ,.msg_stream_mask_p(lce_req_stream_mask_gp)
+     ,.fsm_stream_mask_p(lce_req_stream_mask_gp)
+     )
+   req_pump_in
+    (.clk_i(clk_i)
+     ,.reset_i(reset_i)
+
+     ,.msg_header_i(lce_req_header_cast_i)
+     ,.msg_data_i(lce_req_data_i)
+     ,.msg_v_i(lce_req_v_i)
+     ,.msg_ready_and_o(lce_req_ready_and_o)
+
+     ,.fsm_header_o(fsm_req_header_lo)
+     ,.fsm_data_o(fsm_req_data_lo)
+     ,.fsm_v_o(fsm_req_v_lo)
+     ,.fsm_yumi_i(fsm_req_yumi_li)
+     ,.fsm_addr_o(fsm_req_addr_lo)
+     ,.fsm_new_o(fsm_req_new_lo)
+     ,.fsm_critical_o(fsm_req_critical_lo)
+     ,.fsm_last_o(fsm_req_last_lo)
+     );
+
+  bp_bedrock_mem_fwd_header_s fsm_fwd_header_li;
+  logic [bedrock_fill_width_p-1:0] fsm_fwd_data_li;
+  logic fsm_fwd_v_li, fsm_fwd_ready_then_lo;
+  logic [paddr_width_p-1:0] fsm_fwd_addr_lo;
+  logic fsm_fwd_new_lo, fsm_fwd_critical_lo, fsm_fwd_last_lo;
+  bp_me_stream_pump_out
+   #(.bp_params_p(bp_params_p)
+     ,.data_width_p(bedrock_fill_width_p)
+     ,.payload_width_p(mem_fwd_payload_width_lp)
+     ,.msg_stream_mask_p(mem_fwd_stream_mask_gp)
+     ,.fsm_stream_mask_p(mem_fwd_stream_mask_gp)
+     )
+   fwd_pump_out
+    (.clk_i(clk_i)
+     ,.reset_i(reset_i)
+
+     ,.msg_header_o(mem_fwd_header_cast_o)
+     ,.msg_data_o(mem_fwd_data_o)
+     ,.msg_v_o(mem_fwd_v_o)
+     ,.msg_ready_and_i(mem_fwd_ready_and_i)
+
+     ,.fsm_header_i(fsm_fwd_header_li)
+     ,.fsm_data_i(fsm_fwd_data_li)
+     ,.fsm_v_i(fsm_fwd_v_li)
+     ,.fsm_ready_then_o(fsm_fwd_ready_then_lo)
+     ,.fsm_addr_o(fsm_fwd_addr_lo)
+     ,.fsm_new_o(fsm_fwd_new_lo)
+     ,.fsm_critical_o(fsm_fwd_critical_lo)
+     ,.fsm_last_o(fsm_fwd_last_lo)
+     );
+
+  bp_bedrock_mem_rev_header_s fsm_rev_header_lo;
+  logic [bedrock_fill_width_p-1:0] fsm_rev_data_lo;
+  logic fsm_rev_v_lo, fsm_rev_yumi_li;
+  logic [paddr_width_p-1:0] fsm_rev_addr_lo;
+  logic fsm_rev_new_lo, fsm_rev_critical_lo, fsm_rev_last_lo;
+  bp_me_stream_pump_in
+   #(.bp_params_p(bp_params_p)
+     ,.data_width_p(bedrock_fill_width_p)
+     ,.payload_width_p(mem_rev_payload_width_lp)
+     ,.msg_stream_mask_p(mem_rev_stream_mask_gp)
+     ,.fsm_stream_mask_p(mem_rev_stream_mask_gp)
+     )
+   rev_pump_in
+    (.clk_i(clk_i)
+     ,.reset_i(reset_i)
+
+     ,.msg_header_i(mem_rev_header_cast_i)
+     ,.msg_data_i(mem_rev_data_i)
+     ,.msg_v_i(mem_rev_v_i)
+     ,.msg_ready_and_o(mem_rev_ready_and_o)
+
+     ,.fsm_header_o(fsm_rev_header_lo)
+     ,.fsm_data_o(fsm_rev_data_lo)
+     ,.fsm_v_o(fsm_rev_v_lo)
+     ,.fsm_yumi_i(fsm_rev_yumi_li)
+     ,.fsm_addr_o(fsm_rev_addr_lo)
+     ,.fsm_new_o(fsm_rev_new_lo)
+     ,.fsm_critical_o(fsm_rev_critical_lo)
+     ,.fsm_last_o(fsm_rev_last_lo)
+     );
+
+  bp_bedrock_lce_cmd_header_s fsm_cmd_header_li;
+  logic [bedrock_fill_width_p-1:0] fsm_cmd_data_li;
+  logic fsm_cmd_v_li, fsm_cmd_ready_then_lo;
+  logic [paddr_width_p-1:0] fsm_cmd_addr_lo;
+  logic fsm_cmd_new_lo, fsm_cmd_critical_lo, fsm_cmd_last_lo;
+  bp_me_stream_pump_out
+   #(.bp_params_p(bp_params_p)
+     ,.data_width_p(bedrock_fill_width_p)
+     ,.payload_width_p(lce_cmd_payload_width_lp)
+     ,.msg_stream_mask_p(lce_cmd_stream_mask_gp)
+     ,.fsm_stream_mask_p(lce_cmd_stream_mask_gp)
+     )
+   cmd_pump_out
+    (.clk_i(clk_i)
+     ,.reset_i(reset_i)
+
+     ,.msg_header_o(lce_cmd_header_cast_o)
+     ,.msg_data_o(lce_cmd_data_o)
+     ,.msg_v_o(lce_cmd_v_o)
+     ,.msg_ready_and_i(lce_cmd_ready_and_i)
+
+     ,.fsm_header_i(fsm_cmd_header_li)
+     ,.fsm_data_i(fsm_cmd_data_li)
+     ,.fsm_v_i(fsm_cmd_v_li)
+     ,.fsm_ready_then_o(fsm_cmd_ready_then_lo)
+     ,.fsm_addr_o(fsm_cmd_addr_lo)
+     ,.fsm_new_o(fsm_cmd_new_lo)
+     ,.fsm_critical_o(fsm_cmd_critical_lo)
+     ,.fsm_last_o(fsm_cmd_last_lo)
+     );
+
+  wire lce_req_wr_not_rd = (fsm_req_header_lo.msg_type.req == e_bedrock_req_uc_wr);
+  wire mem_rev_wr_not_rd = (fsm_rev_header_lo.msg_type.rev == e_bedrock_mem_wr);
   always_comb
     begin
-      io_cmd_header_cast_o = '0;
-      io_cmd_header_cast_o.msg_type.mem     = lce_req_wr_not_rd ? e_bedrock_mem_uc_wr : e_bedrock_mem_uc_rd;
-      io_cmd_header_cast_o.addr             = lce_req_header_cast_i.addr;
-      io_cmd_header_cast_o.size             = lce_req_header_cast_i.size;
-      io_cmd_header_cast_o.payload.lce_id   = lce_req_header_cast_i.payload.src_id;
-      io_cmd_header_cast_o.payload.did      = did_i;
-      io_cmd_header_cast_o.payload.uncached = 1'b1;
-      io_cmd_data_o                         = lce_req_data_i;
-    end
+      fsm_fwd_header_li.msg_type         = lce_req_wr_not_rd ? e_bedrock_mem_wr : e_bedrock_mem_rd;
+      fsm_fwd_header_li.subop            = e_bedrock_store; // TODO: support I/O AMOs
+      fsm_fwd_header_li.addr             = fsm_req_header_lo.addr;
+      fsm_fwd_header_li.size             = fsm_req_header_lo.size;
+      fsm_fwd_header_li.payload          = '0;
+      fsm_fwd_header_li.payload.lce_id   = fsm_req_header_lo.payload.src_id;
+      fsm_fwd_header_li.payload.src_did  = fsm_req_header_lo.payload.src_did;
+      fsm_fwd_header_li.payload.uncached = 1'b1;
+      fsm_fwd_data_li                    = fsm_req_data_lo;
+      fsm_fwd_v_li                       = fsm_fwd_ready_then_lo & fsm_req_v_lo;
+      fsm_req_yumi_li                    = fsm_fwd_v_li;
 
-  assign io_resp_ready_and_o = lce_cmd_ready_and_i;
-  assign lce_cmd_v_o         = io_resp_v_i;
-  wire io_resp_wr_not_rd = (io_resp_header_cast_i.msg_type.mem == e_bedrock_mem_uc_wr);
-  always_comb
-    begin
-      lce_cmd_header_cast_o = '0;
-      lce_cmd_header_cast_o.msg_type.cmd   = io_resp_wr_not_rd ? e_bedrock_cmd_uc_st_done : e_bedrock_cmd_uc_data;
-      lce_cmd_header_cast_o.addr           = io_resp_header_cast_i.addr;
-      lce_cmd_header_cast_o.size           = io_resp_header_cast_i.size;
-      lce_cmd_header_cast_o.payload.dst_id = io_resp_header_cast_i.payload.lce_id;
-      lce_cmd_header_cast_o.payload.src_id = cce_id_i;
-      lce_cmd_data_o                       = io_resp_data_i;
+      fsm_cmd_header_li.msg_type         = mem_rev_wr_not_rd ? e_bedrock_cmd_uc_st_done : e_bedrock_cmd_uc_data;
+      fsm_cmd_header_li.subop            = e_bedrock_store; // TODO: support I/O AMOs
+      fsm_cmd_header_li.addr             = fsm_rev_header_lo.addr;
+      fsm_cmd_header_li.size             = fsm_rev_header_lo.size;
+      fsm_cmd_header_li.payload          = '0;
+      fsm_cmd_header_li.payload.src_id   = cce_id_i;
+      fsm_cmd_header_li.payload.dst_id   = fsm_rev_header_lo.payload.lce_id;
+      fsm_cmd_header_li.payload.src_did  = fsm_rev_header_lo.payload.src_did;
+      fsm_cmd_data_li                    = fsm_rev_data_lo;
+      fsm_cmd_v_li                       = fsm_cmd_ready_then_lo & fsm_rev_v_lo;
+      fsm_rev_yumi_li                    = fsm_cmd_v_li;
     end
 
 endmodule

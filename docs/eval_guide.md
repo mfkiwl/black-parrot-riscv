@@ -1,13 +1,10 @@
 # Evaluation Guide (Full)
-## Build the simulation tools
-    # Clone the latest repo
+## Build the simulation libraries
+    # Clone the latest repo (if necessary)
     git clone https://github.com/black-parrot/black-parrot.git
     cd black-parrot
-    # make tools is a target which will build Verilator, Dromajo and our DRAMSim simulation library
-    # For faster builds, make tools -j is parallelizable!
-    # BSG users should instead use 'make tools_bsg', which sets up the bsg CAD environment
-    # Other users should set up Synopsys VCS or DC and put the binaries on their PATH
-    make tools
+    # make libs is a target which will build DRAMSim simulation library
+    make libs
 
 The *master* branch contains most recent stable version. This is the recommended branch for someone wishing to try out BlackParrot.
 
@@ -62,9 +59,9 @@ support all targets, however. These targets include:
 
 ### Supported TOOLs
 BlackParrot supports these tools for simulation and design checking. We welcome contributions for additional tool support, especially for open-source tools.
-- Verilator (.sc suffix)
-- Synopsys VCS (.v suffix)
-- Synopsys DC (.syn suffix)
+- Verilator (.verilator suffix)
+- Synopsys VCS (.vcs suffix)
+- Synopsys DC (.dc suffix)
 - Vivado (.vivado suffix)
 - BSG SV2V (.bsg_sv2v suffix)
 - SureLog (.surelog suffix)
@@ -93,6 +90,7 @@ bp_top/test/tb/bp_tethered/Makefile.testlist. `make prog` builds the bp-tests, r
 
 ### Example Commands
     make build_dump.v sim_dump.v SUITE=bp-tests PROG=hello_world  # Run hello_world in VCS with dumping
+    make build_dump.sc sim_dump.sc SUITE=bp-tests PROG=hello_world  # Run hello_world in Verilator with dumping
     make wave.v SUITE=bp-tests PROG=hello_world              # Open hello_world waveform in dve
     make build_cov.sc sim.sc SUITE=riscv-tests PROG=rsort    # Run hello_world in Verilator with coverage
 
@@ -135,5 +133,4 @@ The reports directory contains very brief summaries of tool runs. For example, w
 - **ci/** contains scripts used to run Continuous Integration jobs, mostly using the same Makefile commands but with additional data collection.
 - **docs/** contains documentation, images, guides and links to document Blackparrot.
 - **external/** contains submodules corresponding to tooling that BlackParrot depends upon, such as the Verilator.
-- **tools/** contains tools needed for RTL simulation and manipulation.
 

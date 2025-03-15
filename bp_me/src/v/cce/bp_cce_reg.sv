@@ -17,14 +17,13 @@ module bp_cce_reg
     `declare_bp_proc_params(bp_params_p)
 
     // Derived parameters
-    , localparam block_size_in_bytes_lp    = (cce_block_width_p/8)
+    , localparam block_size_in_bytes_lp    = (bedrock_block_width_p/8)
     , localparam lg_block_size_in_bytes_lp = `BSG_SAFE_CLOG2(block_size_in_bytes_lp)
 
-    , localparam mshr_width_lp = `bp_cce_mshr_width(lce_id_width_p, lce_assoc_p, paddr_width_p)
+    , localparam mshr_width_lp = `bp_cce_mshr_width(paddr_width_p, lce_id_width_p, cce_width_p, did_width_p, lce_assoc_p)
 
     // Interface Widths
-    `declare_bp_bedrock_lce_if_widths(paddr_width_p, lce_id_width_p, cce_id_width_p, lce_assoc_p, lce)
-    `declare_bp_bedrock_mem_if_widths(paddr_width_p, did_width_p, lce_id_width_p, lce_assoc_p, cce)
+    `declare_bp_bedrock_if_widths(paddr_width_p, lce_id_width_p, cce_id_width_p, did_width_p, lce_assoc_p)
 
   )
   (input                                                                   clk_i
@@ -44,7 +43,7 @@ module bp_cce_reg
    , input [lce_req_header_width_lp-1:0]                                   lce_req_header_i
    , input                                                                 lce_req_v_i
    , input [lce_resp_header_width_lp-1:0]                                  lce_resp_header_i
-   , input [cce_mem_header_width_lp-1:0]                                   mem_resp_header_i
+   , input [mem_rev_header_width_lp-1:0]                                   mem_rev_header_i
 
    // For RDP, output state of pending bits from read operation
    , input                                                                 pending_i
@@ -81,19 +80,18 @@ module bp_cce_reg
 
 
   // Interface Structs
-  `declare_bp_bedrock_lce_if(paddr_width_p, lce_id_width_p, cce_id_width_p, lce_assoc_p, lce);
-  `declare_bp_bedrock_mem_if(paddr_width_p, did_width_p, lce_id_width_p, lce_assoc_p, cce);
+  `declare_bp_bedrock_if(paddr_width_p, lce_id_width_p, cce_id_width_p, did_width_p, lce_assoc_p);
 
   bp_bedrock_lce_req_header_s  lce_req_hdr;
   bp_bedrock_lce_resp_header_s lce_resp_hdr;
-  bp_bedrock_cce_mem_header_s  mem_resp_hdr;
+  bp_bedrock_mem_rev_header_s      mem_rev_hdr;
 
   assign lce_req_hdr  = lce_req_header_i;
   assign lce_resp_hdr = lce_resp_header_i;
-  assign mem_resp_hdr = mem_resp_header_i;
+  assign mem_rev_hdr = mem_rev_header_i;
 
   // Registers
-  `declare_bp_cce_mshr_s(lce_id_width_p, lce_assoc_p, paddr_width_p);
+  `declare_bp_cce_mshr_s(paddr_width_p, lce_id_width_p, cce_id_width_p, did_width_p, lce_assoc_p);
 
   bp_cce_mshr_s                                                mshr_r, mshr_n;
   logic [`bp_cce_inst_num_gpr-1:0][`bp_cce_inst_gpr_width-1:0] gpr_r;
@@ -113,15 +111,15 @@ module bp_cce_reg
       )
     req_pma
       (.paddr_i(lce_req_hdr.addr)
-       ,.paddr_v_i(lce_req_v_i)
        ,.cacheable_addr_o(req_pma_cacheable_addr_lo)
        );
 
-  //synopsys translate_off
+  // synopsys translate_off
   always @(negedge clk_i) begin
     if (~reset_i) begin
       // Cacheable requests must target cacheable memory
-      assert(!(lce_req_v_i && ~req_pma_cacheable_addr_lo
+      assert(reset_i !== '0 ||
+             !(lce_req_v_i && ~req_pma_cacheable_addr_lo
                && ((lce_req_hdr.msg_type.req == e_bedrock_req_rd_miss)
                    || (lce_req_hdr.msg_type.req == e_bedrock_req_wr_miss))
               )
@@ -129,7 +127,7 @@ module bp_cce_reg
       $error("CCE PMA violation - cacheable requests must target cacheable memory");
     end
   end
-  //synopsys translate_on
+  // synopsys translate_on
 
   // Write mask for GPRs
   // This is by default the write mask from the decoded instruction, but it is also modified
@@ -199,16 +197,17 @@ module bp_cce_reg
       // default to catch any unset fields
       mshr_n = mshr_r;
 
-      // LCE ID - from lce_req, lce_resp, mem_resp.payload, or move
-      // paddr - from lce_req, lce_resp, mem_resp, or move
+      // LCE ID - from lce_req, lce_resp, mem_rev.payload, or move
+      // paddr - from lce_req, lce_resp, mem_rev, or move
       // LRU Way ID - from lce_req or move
-      // Next Coh State - from move or mem_resp.payload
+      // Next Coh State - from move or mem_rev.payload
       // Message Size - from lce_req or move
-      // Way ID - from move, GAD, or mem_resp
+      // Way ID - from move, GAD, or mem_rev
       // Owner LCE ID - from GAD or move
       // Owner Way ID - from GAD or move
       // LRU paddr - from Directory or move
       mshr_n.lce_id = src_a_i[0+:lce_id_width_p];
+      mshr_n.src_did = src_a_i[lce_id_width_p+:did_width_p];
       mshr_n.paddr = src_a_i[0+:paddr_width_p];
       mshr_n.lru_way_id = src_a_i[0+:lce_assoc_width_p];
       mshr_n.next_coh_state = bp_coh_states_e'(src_a_i[0+:$bits(bp_coh_states_e)]);
@@ -230,28 +229,29 @@ module bp_cce_reg
         unique case (decoded_inst_i.popq_qsel)
           e_src_q_sel_lce_req: begin
             mshr_n.lce_id = lce_req_hdr.payload.src_id;
+            mshr_n.src_did = lce_req_hdr.payload.src_did;
             mshr_n.paddr = lce_req_hdr.addr;
             mshr_n.lru_way_id = lce_req_hdr.payload.lru_way_id;
             mshr_n.msg_size = lce_req_hdr.size;
             // flags written here must have their flag_w_v bit set by the decoder
-            mshr_n.flags[e_opd_rqf] = lce_req_rqf;
-            mshr_n.flags[e_opd_ucf] = lce_req_ucf;
-            mshr_n.flags[e_opd_nerf] = lce_req_nerf;
-            mshr_n.flags[e_opd_rcf] = req_pma_cacheable_addr_lo;
+            mshr_n.flags.write_not_read = lce_req_rqf;
+            mshr_n.flags.uncached = lce_req_ucf;
+            mshr_n.flags.non_exclusive = lce_req_nerf;
+            mshr_n.flags.cacheable_address = req_pma_cacheable_addr_lo;
           end
           e_src_q_sel_lce_resp: begin
             //mshr_n.lce_id = lce_resp_hdr.src_id;
             //mshr_n.paddr = lce_resp_hdr.addr;
             //mshr_n.msg_size = lce_resp_hdr.size;
-            mshr_n.flags[e_opd_nwbf] = lce_resp_nwbf;
+            mshr_n.flags.null_writeback = lce_resp_nwbf;
           end
-          e_src_q_sel_mem_resp: begin
-            //mshr_n.lce_id = mem_resp_hdr.payload.lce_id;
-            //mshr_n.way_id = mem_resp_hdr.payload.way_id;
-            //mshr_n.paddr = mem_resp_hdr.addr;
-            //mshr_n.next_coh_state = mem_resp_hdr.payload.state;
-            //mshr_n.msg_size = mem_resp_hdr.size;
-            mshr_n.flags[e_opd_sf] = mem_resp_hdr.payload.speculative;
+          e_src_q_sel_mem_rev: begin
+            //mshr_n.lce_id = mem_rev_hdr.payload.lce_id;
+            //mshr_n.way_id = mem_rev_hdr.payload.way_id;
+            //mshr_n.paddr = mem_rev_hdr.addr;
+            //mshr_n.next_coh_state = mem_rev_hdr.payload.state;
+            //mshr_n.msg_size = mem_rev_hdr.size;
+            mshr_n.flags.speculative = mem_rev_hdr.payload.speculative;
           end
           default: begin
           end
@@ -264,13 +264,13 @@ module bp_cce_reg
         mshr_n.owner_lce_id = gad_owner_lce_i;
         mshr_n.owner_way_id = gad_owner_way_i;
         mshr_n.owner_coh_state = gad_owner_coh_state_i;
-        mshr_n.flags[e_opd_rf] = gad_replacement_flag_i;
-        mshr_n.flags[e_opd_uf] = gad_upgrade_flag_i;
-        mshr_n.flags[e_opd_csf] = gad_cached_shared_flag_i;
-        mshr_n.flags[e_opd_cef] = gad_cached_exclusive_flag_i;
-        mshr_n.flags[e_opd_cmf] = gad_cached_modified_flag_i;
-        mshr_n.flags[e_opd_cof] = gad_cached_owned_flag_i;
-        mshr_n.flags[e_opd_cff] = gad_cached_forward_flag_i;
+        mshr_n.flags.replacement = gad_replacement_flag_i;
+        mshr_n.flags.upgrade = gad_upgrade_flag_i;
+        mshr_n.flags.cached_shared = gad_cached_shared_flag_i;
+        mshr_n.flags.cached_exclusive = gad_cached_exclusive_flag_i;
+        mshr_n.flags.cached_modified = gad_cached_modified_flag_i;
+        mshr_n.flags.cached_owned = gad_cached_owned_flag_i;
+        mshr_n.flags.cached_forward = gad_cached_forward_flag_i;
       end
 
       // Overrides from defaults - Directory
@@ -279,14 +279,14 @@ module bp_cce_reg
         mshr_n.lru_coh_state = dir_lru_coh_state_i;
       end
 
-      // RDP instruction writes pending flag
+      // RDP instruction writes pending flag from pending bit read
       if (decoded_inst_i.pending_r_v) begin
-        mshr_n.flags[e_opd_pf] = pending_i;
+        mshr_n.flags.pending = pending_i;
       end
 
-      // Spec Bits Read
+      // Spec Bits Read writes speculative flag from spec bit read
       if (decoded_inst_i.spec_r_v) begin
-        mshr_n.flags[e_opd_sf] = spec_sf_i;
+        mshr_n.flags.speculative = spec_sf_i;
       end
 
       // Flag operation - ldflags, ldflagsi, or clf
@@ -333,6 +333,7 @@ module bp_cce_reg
       end else begin
         if (~stall_i & decoded_inst_i.lce_w_v) begin
           mshr_r.lce_id <= mshr_n.lce_id;
+          mshr_r.src_did <= mshr_n.src_did;
         end
         if (~stall_i & decoded_inst_i.addr_w_v) begin
           mshr_r.paddr <= mshr_n.paddr;

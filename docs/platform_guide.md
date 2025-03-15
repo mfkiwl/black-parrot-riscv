@@ -3,26 +3,26 @@
 ![Tile Taxonomy](tile_taxonomy.png)
 
 ## Instruction Latencies
-* RV64I arithmetic instructions have 1-cycle latency
-* RV64IA memory instructions have 3-cycle latency
-* RV64M instructions have a 4-cycle latency, except for division, which is iterative
-* Rv64FD instructions have a 5-cycle latency, exception for fdiv/fsqrt, which are iterative
+* RV64IB arithmetic instructions have 1-cycle latency
+* RV64IA memory instructions have 2/3-cycle latency
+* RV64M instructions have a 3-cycle latency, except for division, which is iterative
+* Rv64FD instructions have a 4-cycle latency, exception for fdiv/fsqrt, which are iterative
 * BlackParrot has a load-to-use time of 2 cycles for dwords, 3 cycles for words, halfs, and bytes
 * BlackParrot has a 2-cycle L1 hit latency for integer loads
 * BlackParrot has a 3-cycle L1 hit latency for floating point loads 
-* BlackParrot has a 2-cycle L2 hit latency, plus possible network interaction
+* BlackParrot has a 2-cycle L2 hit latency, plus network interaction
 
 BlackParrot has full forwarding for integer instructions
 
 ## CSRs
 BlackParrot supports the following CSRs:
 * U-mode
-  * ustatus, cycle, time. instret
+  * ustatus, cycle, time, instret
 * S-mode
   * sstatus, sscratch, sepc, scause, stval, sip, satp
 * M-mode
-  * mvendorid (0), marchid (13), mimpid (1, incremented on tapeout), mhartid, mstatus
-  * misa ({2'b10, 36'b0, 26'h140101}), medeleg, mideleg, mie, mtvec, mtvec, mcounteren
+  * mvendorid, marchid, mimpid, mhartid, mstatus
+  * misa, medeleg, mideleg, mie, mtvec, mtvec, mcounteren
   * mscratch, mepc, mcause, mtval, mip, mcycle, minstret, mcountinhibit
 * D-mode (Full debug mode support is a work-in-progress)
   * dcsr
@@ -86,10 +86,14 @@ BlackParrot has a configurable physical address width as well as maximum DRAM si
   * Cached, global memory
   * Striped by cache line
   * Cached DRAM region
-* 0x01_0000_0000 - 0x01_FFFF_FFFF
+* 0x01_0000_0000 - 0x01_7FFF_FFFF
   * Uncached, global memory
   * Striped by cache line
-  * Uncached DRAM region
+  * L1-Uncached/L2-Cached DRAM region
+* 0x01_8000_0000 - 0x01_FFFF_FFFF
+  * Uncached, global memory
+  * Striped by cache line
+  * L1-Uncached/L2-Uncached DRAM region
 * 0x02_0000_0000 - 0x03_FFFF_FFFF
   * Uncached, global memory
   * Striped by tile
@@ -139,27 +143,31 @@ These addresses are per-tile. To access them on a tile N, prepend N to the addre
 
 | Device   | Name        | Address         | Description                                                                                                                       |
 |----------|-------------|-----------------|-----------------------------------------------------------------------------------------------------------------------------------|
-| Bootrom* | Bootrom     | 01_0000-01_ffff | The bootrom which bootstraps BlackParrot in bootrom configurations                                                                |
 | Host*    | getchar     | 10_0000         | A polling implementation to get a single char from a tethered host                                                                |
 |          | putchar     | 10_1000         | Puts a character onto the terminal of a tethered host                                                                             |
 |          | finish      | 10_2000-10_2fff | Terminates a multicore BlackParrot simulation, when finish[x] is received for each core x in the system                           |
 |          | putch       | 10_3000-10_3fff | putch[x] puts a character into a private terminal for core x. This is useful for debugging multicore simulations                  |
-| CFG      | freeze      | 20_0008         | Freezes the core, preventing all fetch operations. Will drain the pipeline if set during runtime.                                 |
-|          | core_id     | 20_000c         | Read-only. This tile's core id. This is a local id within the chip                                                                |
-|          | did         | 20_0010         | Read-only. This tile's domain id. This is an chip-wide identifier                                                                 |
-|          | cord        | 20_0014         | Read-only. This tile's coordinate. In {y,x} format                                                                                |
-|          | host_did    | 20_0018         | Host domain id. This identifies which direction to send host packets, relative to our own domain id                               |
-|          | hio_mask    | 20_001c         | A mask of the upper uncached bits of an address. If an address width an unset domain bit is loaded, it will cause an access fault |
+| Bootrom* | bootrom     | 11_0000-11_ffff | The bootrom which bootstraps BlackParrot in bootrom configurations                                                                |
+| CFG      | unused      | 20_0000         | Unused.                                                                                                                           |
+|          | freeze      | 20_0008         | Freezes the core, preventing all fetch operations. Will drain the pipeline if set during runtime. Defaults to frozen.             |
+|          | npc         | 20_0010         | When freeze is lowered or a debug irq is raised,this becomes the architectural NPC. Defaults to bootrom address. 16B aligned.     |
+|          | core_id     | 20_0018         | Read-only. This tile's core id. This is a local id within the chip                                                                |
+|          | did         | 20_0020         | Read-only. This tile's domain id. This is an chip-wide identifier                                                                 |
+|          | cord        | 20_0028         | Read-only. This tile's coordinate. In {y,x} format                                                                                |
+|          | host_did    | 20_0030         | Host domain id. This identifies which direction to send host packets, relative to our own domain id                               |
+|          | hio_mask    | 20_0038         | A mask of the upper uncached bits of an address. If an address width an unset domain bit is loaded, it will cause an access fault |
 |          | icache_id   | 20_0200         | Read-only. The I$ Engine ID.                                                                                                      |
-|          | icache_mode | 20_0204         | The I$ mode. Either uncached, cached, or nonspec (will not send a speculative miss)                                               |
+|          | icache_mode | 20_0208         | The I$ mode. Either uncached, cached, or nonspec (will not send a speculative miss)                                               |
 |          | dcache_id   | 20_0400         | Read-only. The D$ Engine ID.                                                                                                      |
-|          | dcache_mode | 20_0404         | The D$ mode. Either uncached or cached. (D$ will never send speculative misses)                                                   |
+|          | dcache_mode | 20_0408         | The D$ mode. Either uncached or cached. (D$ will never send speculative misses)                                                   |
 |          | cce_id      | 20_0600         | Read-only. The CCE Engine ID.                                                                                                     |
-|          | cce_mode    | 20_0604         | The CCE mode. Either uncached or cached. Undefined behavior results when sending cached requests to a CCE in uncached mode        |
+|          | cce_mode    | 20_0608         | The CCE mode. Either uncached or cached. Undefined behavior results when sending cached requests to a CCE in uncached mode        |
 |          | cce_ucode   | 20_8000-20_8fff | The CCE instruction RAM. Must be written before enabling cached mode in a microcoded CCE                                          |
 | CLINT    | mipi        | 30_0000         | mip (software interrupt) bit                                                                                                      |
 |          | mtimecmp    | 30_4000         | Timer compare register. When mtime > mtimecmp, a timer irq is raised in the core                                                  |
+|          | mtimesel    | 30_8000         | Timer select register. 0=core_clk, 1=core_clk/8, 2=external RTC, 3=disable                                                        |
 |          | mtime       | 30_bff8         | A real-time counter. Currently implemented as mcycle/8                                                                            |
 |          | plic        | 30_b000         | A fake PLIC implementation. Effectively a redundant implementation of mipi                                                        |
+|          | debug       | 30_c000         | A request to take a debug interrupt to cfg.npc, and switch into debug mode                                                        |
 
 * This lives outside of the unicore/tile, residing in the tethered host. Implementations must map this correctly for full software support
